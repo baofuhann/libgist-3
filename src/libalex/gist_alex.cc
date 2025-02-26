@@ -18,6 +18,7 @@ using namespace std;
 #include "gist_cursorext.h"	// for gist_cursorext_t::*
 #include "gist_support.h"	// for print<>, parse<>, etc.
 #include <assert.h>
+// #include <alex_base.h>
 
 
 #define DiskSetting 0
@@ -114,64 +115,63 @@ alex_ext_t::alex_ext_t(
 ///////////////////////////////////////////////////////////////////////////////
 
 void bulk_load(const int values, int num_keys){
-    cout<< "执行批量加载，模型初始化的任务"<< endl;
-//     std::cout << "=== Starting ALEX Bulk Load Process ===" << std::endl;
-//     // std::cout << "   - Total keys to load: " << num_keys << std::endl;
-//     if (stats_.num_keys > 0 || num_keys <= 0) {
-//       return;
-//     }
+    cout << "=== Starting ALEX Bulk Load Process ===" << endl;
 
-//     delete_node(page);  // delete the empty root node
+    if (stats_.num_keys > 0 || num_keys <= 0) {
+      return;
+    }
 
-//     stats_.num_keys = num_keys;
+    delete_node(page);  // delete the empty root node
 
-//     // Build temporary root model, which outputs a CDF in the range [0, 1]
-//     std::cout << "\n2. Root Node Creation:" << std::endl;
-//     root_node_ =
-//         new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
-//     T min_key = values[0].first;
-//     T max_key = values[num_keys - 1].first;
-//     root_node_->model_.a_ = 1.0 / (max_key - min_key);
-//     root_node_->model_.b_ = -1.0 * min_key * root_node_->model_.a_;
+    stats_.num_keys = num_keys;
 
-//     // Compute cost of root node
-//     LinearModel<T> root_data_node_model;
-//     data_node_type::build_model(values, num_keys, &root_data_node_model,
-//                                 params_.approximate_model_computation);
-//     DataNodeStats stats;
-//     root_node_->cost_ = data_node_type::compute_expected_cost(
-//         values, num_keys, data_node_type::kInitDensity_,
-//         params_.expected_insert_frac, &root_data_node_model,
-//         params_.approximate_cost_computation, &stats);
-//     // Recursively bulk load
-//     PhyscialAddr RootNodeDisk;
-//     bulk_load_node(values, num_keys, root_node_, num_keys, &RootNodeDisk,
-//                    0, 0, 0,
-//                    &root_data_node_model);
+    // Build temporary root model, which outputs a CDF in the range [0, 1]
+    std::cout << "\n2. Root Node Creation:" << std::endl;
+    root_node_ =
+        new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
+    T min_key = values[0].first;
+    T max_key = values[num_keys - 1].first;
+    root_node_->model_.a_ = 1.0 / (max_key - min_key);
+    root_node_->model_.b_ = -1.0 * min_key * root_node_->model_.a_;
+
+    // Compute cost of root node
+    LinearModel<T> root_data_node_model;
+    data_node_type::build_model(values, num_keys, &root_data_node_model,
+                                params_.approximate_model_computation);
+    DataNodeStats stats;
+    root_node_->cost_ = data_node_type::compute_expected_cost(
+        values, num_keys, data_node_type::kInitDensity_,
+        params_.expected_insert_frac, &root_data_node_model,
+        params_.approximate_cost_computation, &stats);
+    // Recursively bulk load
+    PhyscialAddr RootNodeDisk;
+    bulk_load_node(values, num_keys, root_node_, num_keys, &RootNodeDisk,
+                   0, 0, 0,
+                   &root_data_node_model);
     
-//     if (root_node_->is_leaf_) {
-//       static_cast<data_node_type*>(root_node_)
-//           ->expected_avg_exp_search_iterations_ = stats.num_search_iterations;
-//       static_cast<data_node_type*>(root_node_)->expected_avg_shifts_ =
-//           stats.num_shifts;
-//     }
-//     create_superroot();
-//     update_superroot_key_domain();
-// //    link_all_data_nodes();
-// #if DiskSetting
-//     std::cout << RootNodeDisk.flag << std::endl;
-//     metanode.root_block_id = RootNodeDisk.block;
-//     metanode.root_offset = RootNodeDisk.offset;
-//     metanode.is_leaf = RootNodeDisk.flag;
-//     metanode.dup_root = RootNodeDisk.duplication_factor_;
-//     sync_metanode();
-//     for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-//         node_it.next()) {
-//         if (node_it.current()->is_leaf_ && hybrid_mode == LEAF_DISK)
-//             delete_node(node_it.current());
-//         else if (hybrid_mode == ALL_DISK) delete_node(node_it.current());
-//     }
-// #endif
+    if (root_node_->is_leaf_) {
+      static_cast<data_node_type*>(root_node_)
+          ->expected_avg_exp_search_iterations_ = stats.num_search_iterations;
+      static_cast<data_node_type*>(root_node_)->expected_avg_shifts_ =
+          stats.num_shifts;
+    }
+    create_superroot();
+    update_superroot_key_domain();
+//    link_all_data_nodes();
+#if DiskSetting
+    std::cout << RootNodeDisk.flag << std::endl;
+    metanode.root_block_id = RootNodeDisk.block;
+    metanode.root_offset = RootNodeDisk.offset;
+    metanode.is_leaf = RootNodeDisk.flag;
+    metanode.dup_root = RootNodeDisk.duplication_factor_;
+    sync_metanode();
+    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
+        node_it.next()) {
+        if (node_it.current()->is_leaf_ && hybrid_mode == LEAF_DISK)
+            delete_node(node_it.current());
+        else if (hybrid_mode == ALL_DISK) delete_node(node_it.current());
+    }
+#endif
 
   }
 
@@ -325,9 +325,6 @@ alex_ext_t::insert(
     // stats_.num_keys++;
     // return {Iterator(leaf, insert_pos), true};
 }
-
-
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // gist_alex::remove - remove number of slots
