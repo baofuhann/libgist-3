@@ -37,6 +37,8 @@ public:
     rc_t close();
     // flush and empty buffers
 
+    vector_pair readDataFile(const char *filename);
+
     int size() { return fileSize; }
 
     static const int invalidIdx;

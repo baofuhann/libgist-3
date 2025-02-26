@@ -228,7 +228,33 @@ gist::create(
     W_DO(_file.flush());
     return(RCOK);
 }
+/////////////////////////////////////////////////////////////////////////
+// create - create new alex index file
+//
+// Description:
+//	- initializes tree with empty root and flushes file
+//
+// Return Values:
+//      RCOK
+/////////////////////////////////////////////////////////////////////////
+rc_t
+gist::create(
+    const char*		filename,
+    gist_ext_t*		extension,
+    const char*     datafilename)
+{
+    _ext = extension;
+    W_DO(_file.create(filename, _ext));
+    _isOpen = true;
 
+    // create the root page
+    gist_p root;
+    _new_page(rootNo, root, 1); // this is a leaf
+    assert(rootNo == root.pid());
+    _unfix_page(root);
+    W_DO(_file.flush());
+    return(RCOK);
+}
 
 /////////////////////////////////////////////////////////////////////////
 // create - create index and bulk-load it
@@ -254,8 +280,6 @@ gist::create(
     char* temp1 = "temp1"; // to be changed later
     char* temp2 = "temp2";
     bool toTemp1 = true; // true: write BPs to temp1
-
-
 
 	// VCPORT_B
 	// Gotta make sure that the temp files that are written are written in binary

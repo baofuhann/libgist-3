@@ -104,7 +104,7 @@ public:
 	rr_point_ext_id,	// ranked R-tree
 	npt_ext_id, 		// NP-tree
     gist_numext,
-    bt_alex_ext_id
+    alex_ext_id
     };
     // ID of the particular extension object at hand
     const gist_ext_ids myId;

@@ -33,7 +33,7 @@ static gist_ext_t* _gist_exts[] = {
     &sr_point_ext,
     &rr_point_ext,
     &npt_ext,
-    &bt_alex_ext
+    &alex_ext
 };
 
 #ifdef AMDB

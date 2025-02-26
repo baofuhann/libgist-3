@@ -1,6 +1,5 @@
-// gist_alex.h							-*- c++ -*-
-// Copyright (c) 1997, Regents of the University of California
-// $Id: gist_btree.h,v 1.20 2000/03/10 01:39:02 mashah Exp $
+// gist_alex.h
+
 
 #ifdef __GNUG__
 #pragma interface "gist_alex.h"
@@ -11,9 +10,6 @@
 
 #include "gist_p.h"		// for keyrec_t
 #include "gist_query.h"		// for gist_query_t
-#ifdef AMDB
-#include "amdb_ext.h"
-#endif
 
 // // VCPORT_B
 // #ifndef WIN32
@@ -27,7 +23,7 @@ class gist_p;
 class vec_t;
 class gist_cursorext_t;
 
-class bt_alex_query_t : public gist_query_t {
+class alex_query_t : public gist_query_t {
 public:
 
     enum bt_oper {
@@ -42,9 +38,9 @@ public:
     };
 
     // val1 and val2 must have been allocated with new()
-    bt_alex_query_t(bt_oper oper, void *val1, void *val2);
+    alex_query_t(bt_oper oper, void *val1, void *val2);
     // delete()s val1 and val2
-    ~bt_alex_query_t();
+    ~alex_query_t();
 
     bt_oper oper;
     void *val1;
@@ -53,9 +49,9 @@ public:
 
 
 /*
- * bt_ext_t:
+ * alex_ext_t:
  *
- * B-tree extension class. Leaf items are ordered on the page
+ * Alex extension class. Leaf items are ordered on the page
  * according to their key/data values (data resolves tie of key order,
  * perfect duplicates not allowed). BPs are stored as the inclusive
  * left boundary of the subtree interval (it's the x of [x, y), and y
@@ -63,7 +59,8 @@ public:
  * the key and data of it's leftmost leaf item. The exceptions are the
  * BPs of the leftmost nodes at each level, which contain (-\infty,
  * -\infty).  */
-class bt_alex_ext_t : public gist_ext_t {
+
+class alex_ext_t : public gist_ext_t {
 public:
 
     // generic comparison function
@@ -85,7 +82,7 @@ public:
     typedef void (*NegInftyFct)(void *x);
     NegInftyFct negInftyKey, negInftyData;
 
-    bt_alex_ext_t(
+    alex_ext_t(
         gist_ext_t::gist_ext_ids id,
 	const char* name,
 	PrintPredFct printPred,
@@ -101,7 +98,11 @@ public:
 	NegInftyFct negInftyData);
 
 	// 添加bulk_load
-    void bulk_load(int num_keys) {}
+	// values should be the sorted array of key-payload pairs.
+  	// The number of elements should be num_keys.
+  	// The index must be empty when calling this method.
+	void bulk_load(const int values, int num_keys);
+	// void bulk_load(int num_keys) {}
 
     rc_t insert(
         gist_p& page,
@@ -176,6 +177,22 @@ private:
 	bool keyOnly);
 
 
+   /* Statistics related to the key domain.
+   * The index can hold keys outside the domain, but lookups/inserts on those
+   * keys will be inefficient.
+   * If enough keys fall outside the key domain, then we expand the key domain.
+   */
+	// struct InternalStats {
+	// 	T key_domain_min_ = std::numeric_limits<T>::max();   // 当前键域的最小值
+	// 	T key_domain_max_ = std::numeric_limits<T>::lowest(); // 当前键域的最大值
+	// 	int num_keys_above_key_domain = 0;                    // 超出右侧键域的键数量
+	// 	int num_keys_below_key_domain = 0;                    // 超出左侧键域的键数量
+	// 	int num_keys_at_last_right_domain_resize = 0;         // 上次向右扩展时的总键数
+	// 	int num_keys_at_last_left_domain_resize = 0;          // 上次向左扩展时的总键数
+	// 	T min_key_in_left = std::numeric_limits<T>::max();    // 左侧扩展后的新最小值
+	// 	T max_key_in_right = std::numeric_limits<T>::lowest();// 右侧扩展后的新最大值
+	// };
+
     struct PosInfo {
         const keyrec_t* hdr;
 	int slot; // slot index on page; or: -1: entry1, -2: entry2
@@ -191,12 +208,6 @@ private:
 
 };
 
-extern bt_alex_ext_t bt_alex_ext;
-// extern bt_ext_t bt_str_ext; // 0-terminated strings
-
-#ifdef AMDB
-extern amdb_ext_t amdb_bt_int_ext;
-extern amdb_ext_t amdb_bt_str_ext;
-#endif
+extern alex_ext_t alex_ext;
 
 #endif

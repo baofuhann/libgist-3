@@ -12,15 +12,11 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
-
-// VCPORT_B
-#ifdef WIN32
-#include <iostream>
-
 using namespace std;
-#else
 #include <iostream>
-#endif
+#include <fstream> 
+
+
 // VCPORT_E
 
 #include <errno.h>
@@ -178,6 +174,35 @@ gist_file::close()
 	// VCPORT_E
 
     return(::close(fileHandle));
+}
+
+// Read keys and data values from a file 
+vector_pair
+gist_file::readDataFile(const char *filename){
+    vector<int> keys;
+    vector<int> datas;
+    ifstream fin(filename);
+    if (!fin) {
+        cerr << "Error opening file: " << filename << endl;
+        return vector_pair(keys, datas); 
+    }
+    int number;
+    fin >> number;
+    if (fin.fail()) {
+        cerr << "Error reading data count from file." << endl;
+        return vector_pair(keys, datas); 
+    }
+    int key, data;
+    for(int i = 0; i < number; i++){
+        fin >> key >> data;
+        keys.push_back(key);
+        datas.push_back(data);
+    }
+    if (keys.size() != number) {
+        cerr << "Warning: Expected " << number << " records, but got " << keys.size() << endl;
+    }
+    fin.close();
+    return vector_pair(keys, datas);
 }
 
 rc_t

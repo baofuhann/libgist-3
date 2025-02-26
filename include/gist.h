@@ -69,6 +69,11 @@ public:
 	const char*		    filename,
 	gist_ext_t*		    ext);
 
+	rc_t            create(
+    const char*		filename,
+    gist_ext_t*		extension,
+    const char*     datafilename);
+
     // Produce tuple/data pairs for bulk-loading.  Returns RCOK if call was
     // successful, eEOF if there are no more tuples, and an error indication
     // otherwise. For leaf-level records, 'child' can be set to 0. For internal

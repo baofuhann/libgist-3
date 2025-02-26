@@ -1,6 +1,4 @@
-// gist_btree.cc
-// Copyright (c) 1997, 1998, Regents of the University of California
-// $Id: gist_btree.cc,v 1.28 2000/03/15 00:24:09 mashah Exp $
+// gist_alex.cc
 
 #ifdef __GNUG__
 #pragma implementation "gist_alex.h"
@@ -8,15 +6,11 @@
 
 #include <string.h>
 #include <stdlib.h>
-
-// VCPORT_B
-#ifdef WIN32
 #include <iostream>
 
 using namespace std;
-#else
-#include <iostream>
-#endif
+
+
 // VCPORT_E
 
 #include "gist_compat.h"	// for MAXINT/MININT
@@ -25,12 +19,17 @@ using namespace std;
 #include "gist_support.h"	// for print<>, parse<>, etc.
 #include <assert.h>
 
-bt_alex_query_t::bt_alex_query_t(bt_oper oper, void *val1, void *val2)
+
+#define DiskSetting 0
+#define _Debug 0
+#define Profiling 0
+
+alex_query_t::alex_query_t(bt_oper oper, void *val1, void *val2)
     : oper(oper), val1(val1), val2(val2)
 {
 }
 
-bt_alex_query_t::~bt_alex_query_t()
+alex_query_t::~alex_query_t()
 {
     if (val1 != NULL) delete val1;
     if (val2 != NULL) delete val2;
@@ -79,13 +78,13 @@ str_cmp(const void *a, const void *b)
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::gist_btree - constructor
+// gist_alex::gist_alex - constructor
 //
 // Description:
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-bt_alex_ext_t::bt_alex_ext_t(
+alex_ext_t::alex_ext_t(
     gist_ext_t::gist_ext_ids id,
     const char* name,
     PrintPredFct printPred,
@@ -105,40 +104,233 @@ bt_alex_ext_t::bt_alex_ext_t(
 {
 };
 
+///////////////////////////////////////////////////////////////////////////////
+// gist_alex::bulk_load
+//
+// Description:
+//	- Bulk load a dataset
+// 
+//     
+///////////////////////////////////////////////////////////////////////////////
+
+void bulk_load(const int values, int num_keys){
+    cout<< "执行批量加载，模型初始化的任务"<< endl;
+//     std::cout << "=== Starting ALEX Bulk Load Process ===" << std::endl;
+//     // std::cout << "   - Total keys to load: " << num_keys << std::endl;
+//     if (stats_.num_keys > 0 || num_keys <= 0) {
+//       return;
+//     }
+
+//     delete_node(page);  // delete the empty root node
+
+//     stats_.num_keys = num_keys;
+
+//     // Build temporary root model, which outputs a CDF in the range [0, 1]
+//     std::cout << "\n2. Root Node Creation:" << std::endl;
+//     root_node_ =
+//         new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
+//     T min_key = values[0].first;
+//     T max_key = values[num_keys - 1].first;
+//     root_node_->model_.a_ = 1.0 / (max_key - min_key);
+//     root_node_->model_.b_ = -1.0 * min_key * root_node_->model_.a_;
+
+//     // Compute cost of root node
+//     LinearModel<T> root_data_node_model;
+//     data_node_type::build_model(values, num_keys, &root_data_node_model,
+//                                 params_.approximate_model_computation);
+//     DataNodeStats stats;
+//     root_node_->cost_ = data_node_type::compute_expected_cost(
+//         values, num_keys, data_node_type::kInitDensity_,
+//         params_.expected_insert_frac, &root_data_node_model,
+//         params_.approximate_cost_computation, &stats);
+//     // Recursively bulk load
+//     PhyscialAddr RootNodeDisk;
+//     bulk_load_node(values, num_keys, root_node_, num_keys, &RootNodeDisk,
+//                    0, 0, 0,
+//                    &root_data_node_model);
+    
+//     if (root_node_->is_leaf_) {
+//       static_cast<data_node_type*>(root_node_)
+//           ->expected_avg_exp_search_iterations_ = stats.num_search_iterations;
+//       static_cast<data_node_type*>(root_node_)->expected_avg_shifts_ =
+//           stats.num_shifts;
+//     }
+//     create_superroot();
+//     update_superroot_key_domain();
+// //    link_all_data_nodes();
+// #if DiskSetting
+//     std::cout << RootNodeDisk.flag << std::endl;
+//     metanode.root_block_id = RootNodeDisk.block;
+//     metanode.root_offset = RootNodeDisk.offset;
+//     metanode.is_leaf = RootNodeDisk.flag;
+//     metanode.dup_root = RootNodeDisk.duplication_factor_;
+//     sync_metanode();
+//     for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
+//         node_it.next()) {
+//         if (node_it.current()->is_leaf_ && hybrid_mode == LEAF_DISK)
+//             delete_node(node_it.current());
+//         else if (hybrid_mode == ALL_DISK) delete_node(node_it.current());
+//     }
+// #endif
+
+  }
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::insert - insert new entry in sort order
+// gist_alex::insert - insert new entry in sort order
 //
 // Description:
 //	- insert after rightmost slot with item <= (key, data)
 // Return Values:
 //      RCOK
 ///////////////////////////////////////////////////////////////////////////////
-
 rc_t
-bt_alex_ext_t::insert(
+alex_ext_t::insert(
     gist_p& page,
     const vec_t& key,
     const vec_t& dataPtr,
     shpid_t child)
 {
-    const void* data;
-    if (page.is_leaf()) {
-        data = dataPtr.ptr(0);
-    } else {
-        // by convention, our key also contains a data pointer (to
-        // make the internal node keys unique); we don't want to use
-        // this during _binSearch(), so we 'skip' over it.
-	data = (const void *) (((char *) key.ptr(0)) + this->keySize(key.ptr(0)));
-    }
-    int slot = _binSearch(page, key.ptr(0), data, false);
-    W_DO(page.insert(key, dataPtr, slot + 1, child));
-    return RCOK;
+    cout<< "执行alex的insert任务"<< endl;
+    // // If enough keys fall outside the key domain, expand the root to expand the
+    // // key domain
+    // if (key > istats_.key_domain_max_) {
+    //     istats_.num_keys_above_key_domain++;
+    //     if (should_expand_right()) {
+    //         printf("expand_root_disk-right\n");
+    //     expand_root(key, false);  // expand to the right
+    //     }
+    // } else if (key < istats_.key_domain_min_) {
+    //     istats_.num_keys_below_key_domain++;
+    //     if (should_expand_left()) {
+    //         printf("expand_root_disk-left\n");
+    //     expand_root(key, true);  // expand to the left
+    //     }
+    // }
+
+    // data_node_type* leaf = get_leaf(key);
+
+    // // Nonzero fail flag means that the insert did not happen
+    // std::pair<int, int> ret = leaf->insert(key, payload);
+    // int fail = ret.first;
+    // int insert_pos = ret.second;
+    // if (fail == -1) {
+    //     // Duplicate found and duplicates not allowed
+    //     printf("repeated!!\n");
+    //     return {Iterator(leaf, insert_pos), false};
+    // }
+
+    // // If no insert, figure out what to do with the data node to decrease the
+    // // cost
+    // if (fail) {
+    //     std::vector<TraversalNode> traversal_path;
+    //     get_leaf(key, &traversal_path);
+    //     model_node_type* parent = traversal_path.back().node;
+
+    //     while (fail) {
+    //     auto start_time = std::chrono::high_resolution_clock::now();
+    //     stats_.num_expand_and_scales += leaf->num_resizes_;
+
+    //     if (parent == superroot_) {
+    //         update_superroot_key_domain();
+    //     }
+    //     int bucketID = parent->model_.predict(key);
+    //     bucketID = std::min<int>(std::max<int>(bucketID, 0),
+    //                                 parent->num_children_ - 1);
+    //     std::vector<fanout_tree::FTNode> used_fanout_tree_nodes;
+
+    //     int fanout_tree_depth = 1;
+    //     if (experimental_params_.splitting_policy_method == 0 || fail >= 2) {
+    //         // always split in 2. No extra work required here
+    //     } else if (experimental_params_.splitting_policy_method == 1) {
+    //         // decide between no split (i.e., expand and retrain) or splitting in
+    //         // 2
+    //         fanout_tree_depth = fanout_tree::find_best_fanout_existing_node<T, P>(
+    //             parent, bucketID, stats_.num_keys, used_fanout_tree_nodes, 2);
+    //     } else if (experimental_params_.splitting_policy_method == 2) {
+    //         // use full fanout tree to decide fanout
+    //         fanout_tree_depth = fanout_tree::find_best_fanout_existing_node<T, P>(
+    //             parent, bucketID, stats_.num_keys, used_fanout_tree_nodes,
+    //             derived_params_.max_fanout);
+    //     }
+    //     int best_fanout = 1 << fanout_tree_depth;
+    //     stats_.cost_computation_time +=
+    //         std::chrono::duration_cast<std::chrono::nanoseconds>(
+    //             std::chrono::high_resolution_clock::now() - start_time)
+    //             .count();
+
+    //     if (fanout_tree_depth == 0) {
+    //         // expand existing data node and retrain model
+
+    //         leaf->resize(data_node_type::kMinDensity_, true,
+    //                     leaf->is_append_mostly_right(),
+    //                     leaf->is_append_mostly_left());
+    //         fanout_tree::FTNode& tree_node = used_fanout_tree_nodes[0];
+    //         leaf->cost_ = tree_node.cost;
+    //         leaf->expected_avg_exp_search_iterations_ =
+    //             tree_node.expected_avg_search_iterations;
+    //         leaf->expected_avg_shifts_ = tree_node.expected_avg_shifts;
+    //         leaf->reset_stats();
+    //         stats_.num_expand_and_retrains++;
+    //     } else {
+    //         // split data node: always try to split sideways/upwards, only split
+    //         // downwards if necessary
+    //         bool reuse_model = (fail == 3);
+    //         if (experimental_params_.allow_splitting_upwards) {
+    //         // allow splitting upwards
+    //         assert(experimental_params_.splitting_policy_method != 2);
+    //         int stop_propagation_level = best_split_propagation(traversal_path);
+    //         if (stop_propagation_level <= superroot_->level_) {
+    //             parent = split_downwards(parent, bucketID, fanout_tree_depth,
+    //                                     used_fanout_tree_nodes, reuse_model);
+    //         } else {
+    //             split_upwards(key, stop_propagation_level, traversal_path,
+    //                         reuse_model, &parent);
+    //         }
+    //         } else {
+    //         // either split sideways or downwards
+    //         bool should_split_downwards =
+    //             (parent->num_children_ * best_fanout /
+    //                         (1 << leaf->duplication_factor_) >
+    //                     derived_params_.max_fanout ||
+    //                 parent->level_ == superroot_->level_);
+    //         if (should_split_downwards) {
+
+    //             parent = split_downwards(parent, bucketID, fanout_tree_depth,
+    //                                     used_fanout_tree_nodes, reuse_model);
+    //         } else {
+
+    //             split_sideways(parent, bucketID, fanout_tree_depth,
+    //                             used_fanout_tree_nodes, reuse_model);
+    //         }
+    //         }
+    //         leaf = static_cast<data_node_type*>(parent->get_child_node(key));
+    //     }
+    //     auto end_time = std::chrono::high_resolution_clock::now();
+    //     auto duration = end_time - start_time;
+    //     stats_.splitting_time +=
+    //         std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
+    //             .count();
+
+    //     // Try again to insert the key
+    //     ret = leaf->insert(key, payload);
+    //     fail = ret.first;
+    //     insert_pos = ret.second;
+    //     if (fail == -1) {
+    //         // Duplicate found and duplicates not allowed
+    //         return {Iterator(leaf, insert_pos), false};
+    //     }
+    //     }
+    // }
+    // stats_.num_inserts++;
+    // stats_.num_keys++;
+    // return {Iterator(leaf, insert_pos), true};
 }
 
 
+
+
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::remove - remove number of slots
+// gist_alex::remove - remove number of slots
 //
 // Description:
 // Return Values:
@@ -146,7 +338,7 @@ bt_alex_ext_t::insert(
 ///////////////////////////////////////////////////////////////////////////////
 
 rc_t 
-bt_alex_ext_t::remove(
+alex_ext_t::remove(
     gist_p& page,
     const int slots[],
     int numSlots)
@@ -159,7 +351,7 @@ bt_alex_ext_t::remove(
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::updateKey - nothing to do
+// gist_alex::updateKey - nothing to do
 //
 // Description:
 //	- B-tree partitions the data space, no BPs to update 
@@ -169,7 +361,7 @@ bt_alex_ext_t::remove(
 ///////////////////////////////////////////////////////////////////////////////
 
 rc_t
-bt_alex_ext_t::updateKey(
+alex_ext_t::updateKey(
     gist_p& page,
     int& slot,
     const vec_t& newKey)
@@ -179,7 +371,7 @@ bt_alex_ext_t::updateKey(
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::findMinPen - return insertion subtree of (key, data)
+// gist_alex::findMinPen - return insertion subtree of (key, data)
 //
 // Description:
 //	- return slof of rightmost item that is <= (key, data)
@@ -187,9 +379,8 @@ bt_alex_ext_t::updateKey(
 // Return Values:
 //      RCOK
 ///////////////////////////////////////////////////////////////////////////////
-
 void
-bt_alex_ext_t::findMinPen(
+alex_ext_t::findMinPen(
     const gist_p& page,
     const vec_t& key,
     const vec_t& data,
@@ -201,7 +392,7 @@ bt_alex_ext_t::findMinPen(
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::search - return qualifying slots
+// gist_alex::search - return qualifying slots
 //
 // Description:
 //	- return slof of rightmost item that is <= (key, data)
@@ -209,24 +400,24 @@ bt_alex_ext_t::findMinPen(
 // Return Values:
 //      RCOK
 ///////////////////////////////////////////////////////////////////////////////
-
 void 
-bt_alex_ext_t::search(
+alex_ext_t::search(
     gist_p& page,
     const gist_query_t* query,
     int matches[],
     int& numMatches)
 {
-    const bt_alex_query_t* q = (const bt_alex_query_t *) query;
+
+    const alex_query_t* q = (const alex_query_t *) query;
     int start, end; // start and end slot to scan
 
     numMatches = 0;
     switch (q->oper) {
-    case bt_alex_query_t::bt_nooper:
+    case alex_query_t::bt_nooper:
         start = 0;
 	end = page.nrecs() - 1;
 	break;
-    case bt_alex_query_t::bt_eq:
+    case alex_query_t::bt_eq:
         start = _binSearch(page, q->val1, NULL, true);
 	if (start == -1) {
 	    // we're not going to find anything here
@@ -247,18 +438,18 @@ bt_alex_ext_t::search(
 	// keys as we go through the slots.
 	end = page.nrecs() - 1;
 	break;
-    case bt_alex_query_t::bt_lt:
-    case bt_alex_query_t::bt_le:
+    case alex_query_t::bt_lt:
+    case alex_query_t::bt_le:
         start = 0;
 	end = _binSearch(page, q->val1, NULL, true);
 	break;
-    case bt_alex_query_t::bt_gt:
-    case bt_alex_query_t::bt_ge:
+    case alex_query_t::bt_gt:
+    case alex_query_t::bt_ge:
         start = _binSearch(page, q->val1, NULL, true);
 	if (start == -1) start = 0;
 	end = page.nrecs() - 1;
 	break;
-    case bt_alex_query_t::bt_betw:  // equiv. to >= val1 && <= val2
+    case alex_query_t::bt_betw:  // equiv. to >= val1 && <= val2
         start = _binSearch(page, q->val1, NULL, true);
 	if (start == -1) start = 0;
         end = _binSearch(page, q->val2, NULL, true);
@@ -272,10 +463,10 @@ bt_alex_ext_t::search(
     for (int slot = start; slot <= end; slot++) {
         if (page.is_leaf()) {
 	    switch (q->oper) {
-	    case bt_alex_query_t::bt_nooper:
+	    case alex_query_t::bt_nooper:
 		hit = true;
 		break;
-	    case bt_alex_query_t::bt_eq:
+	    case alex_query_t::bt_eq:
 	        if (keyCmp(page.rec(slot).key(), q->val1) == 0) {
 		    hit = true;
 		} else {
@@ -283,27 +474,27 @@ bt_alex_ext_t::search(
 		    stop = true; // no more equal keys on this page
 		}
 		break;
-	    case bt_alex_query_t::bt_lt:
+	    case alex_query_t::bt_lt:
 	        if (slot != end || keyCmp(page.rec(slot).key(), q->val1) < 0) {
 		    hit = true;
 		}
 		break;
-	    case bt_alex_query_t::bt_le:
+	    case alex_query_t::bt_le:
 		hit = true;
 		break;
-	    case bt_alex_query_t::bt_gt:
+	    case alex_query_t::bt_gt:
 	        if (slot != start || keyCmp(page.rec(slot).key(), q->val1) > 0) {
 		    hit = true;
 		}
 		break;
-	    case bt_alex_query_t::bt_ge:
+	    case alex_query_t::bt_ge:
 		// start positioned on rightmost item <= key, we must only return
 		// items < key
 	        if (slot != start || keyCmp(page.rec(slot).key(), q->val1) >= 0) {
 		    hit = true;
 		}
 		break;
-	    case bt_alex_query_t::bt_betw:
+	    case alex_query_t::bt_betw:
 	        if (slot != start || keyCmp(page.rec(slot).key(), q->val1) >= 0) {
 		    hit = true;
 		}
@@ -314,7 +505,7 @@ bt_alex_ext_t::search(
 
 	} else { // internal node
 	    switch (q->oper) {
-	    case bt_alex_query_t::bt_lt: 
+	    case alex_query_t::bt_lt: 
 		if (slot == end) {
 		    // only goto child if its smallest key < val1; _binSearch()
 		    // might have found key == val1)
@@ -323,7 +514,7 @@ bt_alex_ext_t::search(
 		    hit = true;
 		}
 		break;
-	    case bt_alex_query_t::bt_eq: 
+	    case alex_query_t::bt_eq: 
 		// stop checking the entries when we hit one that's > val1
 	        if (keyCmp(page.rec(slot).key(), q->val1) > 0) {
 		    hit = false;
@@ -349,14 +540,14 @@ bt_alex_ext_t::search(
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree:getKey - return pointer to key on page
+// gist_alex:getKey - return pointer to key on page
 //
 // Description:
 //
 ///////////////////////////////////////////////////////////////////////////////
 
 void 
-bt_alex_ext_t::getKey(
+alex_ext_t::getKey(
     const gist_p& page,
     int slot,
     vec_t& key)
@@ -367,7 +558,7 @@ bt_alex_ext_t::getKey(
 
 
 ///////////////////////////////////////////////////////////////////////////////
-// gist_btree::pickSplit - choose split point that balances size of nodes
+// gist_alex::pickSplit - choose split point that balances size of nodes
 //
 // Description:
 // 	- Chooses a split point that roughly balances the size of the two new
@@ -382,7 +573,7 @@ bt_alex_ext_t::getKey(
 ///////////////////////////////////////////////////////////////////////////////
 
 rc_t 
-bt_alex_ext_t::pickSplit(
+alex_ext_t::pickSplit(
     gist_p& page,
     int rightEntries[],
     int& numRight,
@@ -490,7 +681,7 @@ bt_alex_ext_t::pickSplit(
 
 
 /////////////////////////////////////////////////////////////////////////
-// bt_ext_t::unionBp - generate BP
+// alex_ext_t::unionBp - generate BP
 //
 // Description:
 //	- B-trees partition the data space, which means that BPs do not
@@ -501,7 +692,7 @@ bt_alex_ext_t::pickSplit(
 /////////////////////////////////////////////////////////////////////////
 
 void
-bt_alex_ext_t::unionBp(
+alex_ext_t::unionBp(
     const gist_p& page, // in
     vec_t& bp, // in/out
     bool bpIsValid, // in
@@ -513,14 +704,14 @@ bt_alex_ext_t::unionBp(
 }
 
 gist_cursorext_t*
-bt_alex_ext_t::queryCursor(
+alex_ext_t::queryCursor(
     const gist_query_t* query) const
 {
     return gist_cursorext_t::gist_cursorext_list[gist_cursorext_t::cext_stack_id];
 }
 
 bool 
-bt_alex_ext_t::check(
+alex_ext_t::check(
     const vec_t& bp,
     const vec_t& pred,
     int level)
@@ -535,8 +726,9 @@ bt_alex_ext_t::check(
     return true;
 }
 
+
 int
-bt_alex_ext_t::_binSearch(
+alex_ext_t::_binSearch(
     const gist_p& page,
     const void* key,
     const void* data,
@@ -594,8 +786,9 @@ bt_alex_ext_t::_binSearch(
 // Determine where the two new entries would go on the page (which slots they
 // would occupy). Returns this info through array of PosInfos, two of which will 
 // contain info for new entries
+
 void
-bt_alex_ext_t::_loadPosInfo(
+alex_ext_t::_loadPosInfo(
     gist_p& page,
     const vec_t& entry1,
     const vec_t& entry2,
@@ -712,7 +905,9 @@ str_negInfty(void *s)
 }
 
 
-bt_alex_ext_t bt_alex_ext(gist_ext_t::bt_alex_ext_id, "bt_alex_ext",
+
+
+alex_ext_t alex_ext(gist_ext_t::alex_ext_id, "alex_ext",
     gist_support::printIntBtPred, gist_support::printInt,
     gist_support::parseInt, gist_support::parseInt,
     gist_support::parseIntQuery, int_cmp, int_cmp,

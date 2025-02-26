@@ -123,7 +123,6 @@ bt_ext_t::insert(
     const vec_t& dataPtr,
     shpid_t child)
 {
-    cout<<"开始调用"<<endl;
     const void* data;
     if (page.is_leaf()) {
         data = dataPtr.ptr(0);

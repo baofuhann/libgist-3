@@ -37,6 +37,7 @@ const char false = '\0';
 const char true = '\1';
 #endif
 
+typedef pair<vector<int>, vector<int> > vector_pair;
 typedef unsigned int shpid_t;
 typedef int rc_t;
 #define RCOK 0
@@ -85,5 +86,6 @@ using namespace std;
 
 // Vector used in gist_predcursor_t and various amdb classes
 typedef vector<void *> Vector;
+
 
 #endif // GIST_DEFS_H
