@@ -49,7 +49,23 @@ gist_p::format(
     _insert_expand(0, 1, &hdrV);
     this->_descr->isDirty = true;
 
+    // if (hdr->is_model_node) {
+    //     gistctrl_t* page_hdr = (gistctrl_t*) _get_hdr();
+    //     page_hdr->num_children = 0;
+    //     page_hdr->model_a = 0.0;
+    //     page_hdr->model_b = 0.0;
+    // }
+
     return RCOK;
+}
+
+rc_t
+gist_p::set_page_model(double a, double b)
+{
+    gistctrl_t *hdr = (gistctrl_t *) _get_hdr();
+    hdr->_model.a_ = a;
+    hdr->_model.b_ = b;
+    return(RCOK);
 }
 
 
@@ -184,7 +200,7 @@ gist_p::copy(gist_p& rsib)
 
 rc_t	
 gist_p::set_hdr(const gistctrl_t& new_hdr)
-{
+{ 
     cvec_t hdrv(&new_hdr, sizeof(new_hdr));
     W_DO(_overwrite(0, 0, hdrv));
     return RCOK;
@@ -236,6 +252,7 @@ gist_p::is_node() const
 }
 
 
+
 /////////////////////////////////////////////////////////////////////////
 // gist_p::level - return page level
 //
@@ -251,7 +268,32 @@ gist_p::level() const
     gistctrl_t *hdr = (gistctrl_t *) _get_hdr();
     return hdr->level;
 }
-    
+
+/////////////////////////////////////////////////////////////////////////
+// gist_p::get_cost - return page cost
+//
+// Description:
+//      Returns the stored cost value for the page (ALEX specific)
+//
+// Return Values:
+//      cost value as double
+/////////////////////////////////////////////////////////////////////////
+
+// double gist_p::get_cost() const {
+//     gistctrl_t *hdr = (gistctrl_t *) _get_hdr();
+//     return hdr->cost;
+// }
+
+// void gist_p::set_cost(double new_cost) {
+//     gistctrl_t *hdr = (gistctrl_t *) _get_hdr();
+//     hdr->cost = new_cost;
+// }
+
+const alex::LinearModel<int>& gist_p::get_model() {
+    gistctrl_t *hdr = (gistctrl_t *) _get_hdr();
+    return hdr->_model;  // 返回对象的地址
+}
+
 
 int
 gist_p::rec_size(int idx) const
@@ -353,7 +395,7 @@ gist_p::_insert_expand(
     uint4 total = 0;
     int i;
     for (i = 0; i < cnt; i++)  {
-	total += int(align(vec[i].size()) + sizeof(slot_t));
+	total += int(align_size(vec[i].size()) + sizeof(slot_t));
     }
 
     //  Try to get the space ... could fail with eRECWONTFIT
@@ -376,7 +418,7 @@ gist_p::_insert_expand(
     for (i = 0; i < cnt; i++, p--)  {
 	p->offset = _pp->end;
 	p->length = vec[i].copy_to(_pp->data + p->offset);
-	_pp->end += int(align(p->length));
+	_pp->end += int(align_size(p->length));
     }
 
     _pp->nslots += cnt;
@@ -396,7 +438,7 @@ gist_p::_remove_compress(int idx, int cnt)
     int amt_freed = 0;
     for ( ; p != q; p--)  {
 	assert(p->length < gist_p::max_tup_sz);
-	amt_freed += int(align(p->length) + sizeof(slot_t));
+	amt_freed += int(align_size(p->length) + sizeof(slot_t));
     }
 
     //	Compress slot array
@@ -459,7 +501,7 @@ gist_p::_compress(int idx)
 	    assert(s.offset >= 0);
 	    memcpy(p, scratch+s.offset, s.length);
 	    s.offset = p - _pp->data;
-	    p += align(s.length);
+	    p += align_size(s.length);
 	}
     }
 
@@ -470,7 +512,7 @@ gist_p::_compress(int idx)
 	    assert(s.offset >= 0);
 	    memcpy(p, scratch + s.offset, s.length);
 	    s.offset = p - _pp->data;
-	    p += align(s.length);
+	    p += align_size(s.length);
 	}
     }
 

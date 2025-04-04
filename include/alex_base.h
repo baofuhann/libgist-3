@@ -15,7 +15,7 @@
  #include <iostream>
  #include <limits>
  #include <memory>
-//  #include <random>
+ #include <random>
  #include <set>
  #include <string>
  #include <utility>
@@ -80,13 +80,10 @@
      template<class T>
      class LinearModel {
      public:
-         double a_;  // slope
-         double b_;  // intercept
+         double a_ = 0;  // slope
+         double b_ = 0;  // intercept
  
-         LinearModel() { 
-            a_ = 0;
-            b_ = a_;
-         }
+         LinearModel() = default;
  
          LinearModel(double a, double b) : a_(a), b_(b) {}
  
@@ -148,7 +145,6 @@
                  model_->b_ = static_cast<double>(y_sum_);
                  return;
              }
- 
              if (static_cast<long double>(count_) * xx_sum_ - x_sum_ * x_sum_ == 0) {
                  // all values in a bucket have the same key.
                  model_->a_ = 0;
@@ -156,10 +152,10 @@
                  return;
              }
              // Calculate slope and intercept
-             double slope = static_cast<double>(
+             auto slope = static_cast<double>(
                      (static_cast<long double>(count_) * xy_sum_ - x_sum_ * y_sum_) /
                      (static_cast<long double>(count_) * xx_sum_ - x_sum_ * x_sum_));
-             double intercept = static_cast<double>(
+             auto intercept = static_cast<double>(
                      (y_sum_ - static_cast<long double>(slope) * x_sum_) / count_);
              model_->a_ = slope;
              model_->b_ = intercept;
@@ -172,28 +168,15 @@
          }
  
      private:
-        
-        int count_;
-        long double x_sum_;
-        long double y_sum_;
-        long double xx_sum_;
-        long double xy_sum_;
-        T x_min_;
-        T x_max_;
-        double y_min_;
-        double y_max_;
-        
-        LinearModelBuilder() {
-            count_ = 0;
-            x_sum_ = 0;
-            y_sum_ = 0;
-            xx_sum_ = 0;
-            xy_sum_ = 0;
-            x_min_ = std::numeric_limits<T>::max();
-            x_max_ = std::numeric_limits<T>::lowest();
-            y_min_ = std::numeric_limits<double>::max();
-            y_max_ = std::numeric_limits<double>::lowest();
-        }
+         int count_ = 0;
+         long double x_sum_ = 0;
+         long double y_sum_ = 0;
+         long double xx_sum_ = 0;
+         long double xy_sum_ = 0;
+         T x_min_ = std::numeric_limits<T>::max();
+         T x_max_ = std::numeric_limits<T>::lowest();
+         double y_min_ = std::numeric_limits<double>::max();
+         double y_max_ = std::numeric_limits<double>::lowest();
      };
  
  /*** Comparison ***/
@@ -201,9 +184,9 @@
      struct AlexCompare {
          template<class T1, class T2>
          bool operator()(const T1 &x, const T2 &y) const {
-            //  static_assert(
-            //          std::is_arithmetic<T1>::value && std::is_arithmetic<T2>::value,
-            //          "Comparison types must be numeric.");
+             static_assert(
+                     std::is_arithmetic<T1>::value && std::is_arithmetic<T2>::value,
+                     "Comparison types must be numeric.");
              return x < y;
          }
      };
@@ -247,39 +230,34 @@
  /*** Cost model weights ***/
  
  // Intra-node cost weights
-     double kExpSearchIterationsWeight = 20;
-     double kShiftsWeight = 0.5;
+     inline double kExpSearchIterationsWeight = 20;
+     inline double kShiftsWeight = 0.5;
  
  // TraverseToLeaf cost weights
-     double kNodeLookupsWeight = 20;
-     double kModelSizeWeight = 5e-7;
+     inline double kNodeLookupsWeight = 20;
+     inline double kModelSizeWeight = 5e-7;
  
  /*** Stat Accumulators ***/
  // ALEX依赖简单的线性成本模型，该模型基于在每个数据节点跟踪的两个简单统计数据来预测平均查找时间和插入时间：
  // (a) 指数搜索迭代的平均次数 和 (b) 插入时移动操作的平均次数
  
      struct DataNodeStats {
-         double num_search_iterations; // 平均搜索迭代次数
-         double num_shifts;            // 平均移动次数
-        
-        DataNodeStats() : num_search_iterations(0), num_shifts(0) {}
+         double num_search_iterations = 0; // 平均搜索迭代次数
+         double num_shifts = 0;            // 平均移动次数
      };
  
  // Used when stats are computed using a sample
      struct SampleDataNodeStats {
-
-         double log2_sample_size;
-         double num_search_iterations;
-         double log2_num_shifts;
-
-         SampleDataNodeStats() : log2_sample_size(0), num_search_iterations(0), log2_num_shifts(0) {}
+         double log2_sample_size = 0;
+         double num_search_iterations = 0;
+         double log2_num_shifts = 0;
      };
  
  // Accumulates stats that are used in the cost model, based on the actual vs
  // predicted position of a key
      class StatAccumulator {
      public:
-         virtual ~StatAccumulator(){};
+         virtual ~StatAccumulator() = default;
  
          virtual void accumulate(int actual_position, int predicted_position) = 0;
  
@@ -292,8 +270,6 @@
  // iterations when doing a lookup
      class ExpectedSearchIterationsAccumulator : public StatAccumulator {
      public:
-
-         ExpectedSearchIterationsAccumulator() : cumulative_log_error_(0), count_(0) {}
          void accumulate(int actual_position, int predicted_position) override {
              cumulative_log_error_ +=
                      std::log2(std::abs(predicted_position - actual_position) + 1);
@@ -311,8 +287,8 @@
          }
  
      public:
-         double cumulative_log_error_;
-         int count_;
+         double cumulative_log_error_ = 0;
+         int count_ = 0;
      };
  
  // Mean shifts represents the expected number of shifts when doing an insert
@@ -363,8 +339,7 @@
  // Combines ExpectedSearchIterationsAccumulator and ExpectedShiftsAccumulator
      class ExpectedIterationsAndShiftsAccumulator : public StatAccumulator {
      public:
-         ExpectedIterationsAndShiftsAccumulator() : cumulative_log_error_(0), last_position_(-1),
-                 dense_region_start_idx_(0), num_expected_shifts_(0), count_(0), data_capacity_(-1) {}
+         ExpectedIterationsAndShiftsAccumulator() = default;
  
          explicit ExpectedIterationsAndShiftsAccumulator(int data_capacity)
                  : data_capacity_(data_capacity) {}
@@ -410,12 +385,12 @@
          }
  
      public:
-         double cumulative_log_error_;
+         double cumulative_log_error_ = 0;
          int last_position_ = -1;
-         int dense_region_start_idx_;
-         long long num_expected_shifts_;
-         int count_;
-         int data_capacity_;  // capacity of node
+         int dense_region_start_idx_ = 0;
+         long long num_expected_shifts_ = 0;
+         int count_ = 0;
+         int data_capacity_ = -1;  // capacity of node
      };
  
  /*** Miscellaneous helpers ***/
@@ -440,7 +415,7 @@
  
  #if M1_Chip
  
-     bool cpu_supports_bmi() {
+     inline bool cpu_supports_bmi() {
          return false;
      }
  
@@ -467,7 +442,7 @@
      };
  
      // https://en.wikipedia.org/wiki/CPUID#EAX=7,_ECX=0:_Extended_Features
-     bool cpu_supports_bmi() {
+     inline bool cpu_supports_bmi() {
        return static_cast<bool>(CPUID(7, 0).EBX() & (1 << 3));
      }
  #endif

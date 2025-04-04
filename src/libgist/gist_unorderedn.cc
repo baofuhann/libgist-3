@@ -62,8 +62,8 @@ gist_unorderedn_ext_t::updateKey(
     const keyrec_t& tup = page.rec(slot);
 
     // make sure we have enough space (or: the key might have shrunk)
-    int need = align(newKey.len(0) + sizeof(keyrec_t)) - 
-        align(page.rec_size(slot));
+    int need = align_size(newKey.len(0) + sizeof(keyrec_t)) - 
+        align_size(page.rec_size(slot));
     if (need > 0 && (unsigned) need > page.usable_space()) {
         return (eRECWONTFIT);
     }
@@ -109,8 +109,11 @@ gist_unorderedn_ext_t::search(
     numMatches = 0;
     int count = page.nrecs();
 
+    // 遍历当前页面的所有键记录
     for (int i = 0; i < count; i++) {
+
         const keyrec_t &tup = page.rec(i);
+        // 判断当前键记录是否满足查询条件
 	if (ext.consistent(query, tup.key(), tup.klen(), page.level())) {
 	    // we have a matching entry; push it on the stack
 	    matches[numMatches] = i;

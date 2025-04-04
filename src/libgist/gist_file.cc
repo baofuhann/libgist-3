@@ -177,20 +177,18 @@ gist_file::close()
 }
 
 // Read keys and data values from a file 
-vector_pair
-gist_file::readDataFile(const char *filename){
-    vector<int> keys;
-    vector<int> datas;
+
+rc_t gist_file:: readDataFile(const char * filename, vector<int> &keys, vector<int> &datas){
     ifstream fin(filename);
     if (!fin) {
         cerr << "Error opening file: " << filename << endl;
-        return vector_pair(keys, datas); 
+        return 1;
     }
     int number;
     fin >> number;
     if (fin.fail()) {
         cerr << "Error reading data count from file." << endl;
-        return vector_pair(keys, datas); 
+        return 1;
     }
     int key, data;
     for(int i = 0; i < number; i++){
@@ -202,7 +200,7 @@ gist_file::readDataFile(const char *filename){
         cerr << "Warning: Expected " << number << " records, but got " << keys.size() << endl;
     }
     fin.close();
-    return vector_pair(keys, datas);
+    return 0;
 }
 
 rc_t

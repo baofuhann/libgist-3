@@ -75,6 +75,7 @@ gist_stack_cursorext_t::iter_init(
     gist_cursor_t& cursor,
     const shpid_t& root)
 {
+    cout << "stack_cext: iter_init called" << endl;
     assert(cursor.iter == NULL);
 
     gist_lstk* stack = new gist_lstk();
@@ -498,6 +499,7 @@ gist_switch_cursorext_t::iter_init(
     gist_cursor_t& cursor,
     const shpid_t& root)
 {
+    
     state* s = new state;
     s->which = 0;
     cursor.state = s;

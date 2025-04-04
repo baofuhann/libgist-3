@@ -37,7 +37,7 @@ public:
     rc_t close();
     // flush and empty buffers
 
-    vector_pair readDataFile(const char *filename);
+    rc_t readDataFile(const char* filename, vector<int>& keys, vector<int>& values);
 
     int size() { return fileSize; }
 

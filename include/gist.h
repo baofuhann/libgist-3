@@ -17,6 +17,7 @@
 #include <ostream>
 #include <fstream>
 #include <sstream>
+#include "gist_alex.h" 
 
 #ifdef AMDB
 #include "amdb_defs.h"		// for Map
@@ -31,6 +32,7 @@ class gist_cursor_t;
 class gist_cursorext_t;
 class gist_lstk;
 class gist_ustk;
+class alex_ext_t;
 
 // // VCPORT_B
 // #ifndef WIN32

@@ -21,8 +21,11 @@ DEST = .
 # SRCS = Btree.cc
 # OBJS = Btree.o
 
-SRCS = Alex.cc
-OBJS = Alex.o
+SRCS = Btree_bulk.cc
+OBJS = Btree_bulk.o
+
+# SRCS = Alex.cc
+# OBJS = Alex.o
 
 PROG = $(DEST)/BTree
 # PROG = $(DEST)/Alex

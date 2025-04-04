@@ -37,7 +37,10 @@ else
 INCS+= -I$(LIBGISTHOME)/include/jdk
 endif
 endif
+
 EXTRA_CFLAGS += -fpermissive
+
+
 CFLAGS += ${EXTRA_CFLAGS}
 
 #

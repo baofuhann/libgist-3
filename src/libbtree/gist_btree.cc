@@ -45,7 +45,7 @@ int_cmp(const void *a, const void *b)
     (void) memcpy((void *) &x, a, sizeof(x));
     (void) memcpy((void *) &y, b, sizeof(y));
     // 输出比较的内容
-    cout << "正在比较: " << x << " 和 " << y << endl;
+    // cout << "正在比较: " << x << " 和 " << y << endl;
     if (x < y) { 
         return -1;
     } else if (x > y) {
@@ -501,16 +501,97 @@ bt_ext_t::pickSplit(
 //
 /////////////////////////////////////////////////////////////////////////
 
-void
-bt_ext_t::unionBp(
-    const gist_p& page, // in
-    vec_t& bp, // in/out
-    bool bpIsValid, // in
-    const vec_t& pred1, // in
-    const vec_t& pred2, // in
-    bool& bpChanged) // out
+// void
+// bt_ext_t::unionBp(
+//     const gist_p& page, // in
+//     vec_t& bp, // in/out
+//     bool bpIsValid, // in
+//     const vec_t& pred1, // in
+//     const vec_t& pred2, // in
+//     bool& bpChanged) // out
+// {
+//     cout << "bt_ext_t::unionBp" << endl;
+//     bpChanged = false;
+// }
+
+/**
+ * 原始的代码中并未给出该B+tree的BP更新策略，因此我们需要自己实现
+ * 该函数的目的是根据页面上的记录和额外的谓词，计算出新的BP值
+ */
+void bt_ext_t::unionBp(
+    const gist_p& page,
+    vec_t& bp,
+    bool bpIsValid,
+    const vec_t& pred1,
+    const vec_t& pred2,
+    bool& bpChanged)
 {
+    cout << "bt_ext_t::unionBp 执行" << endl;
+    
+    // 初始化最小和最大键值
+    int minKey = INT_MAX;
+    int maxKey = INT_MIN;
+    bool keysFound = false;
+    
+    // 遍历页面上的所有记录
+    for (int i = 0; i < page.nrecs(); i++) {
+        const keyrec_t& rec = page.rec(i);
+        if (rec.klen() >= sizeof(int)) {
+            int key = *((int*)rec.key());
+            minKey = min(minKey, key);
+            maxKey = max(maxKey, key);
+            keysFound = true;
+        }
+    }
+    
+    // 处理额外的谓词pred1
+    if (pred1.size() >= sizeof(int)) {
+        int key = *((int*)pred1.ptr(0));
+        minKey = min(minKey, key);
+        maxKey = max(maxKey, key);
+        keysFound = true;
+    }
+    
+    // 处理额外的谓词pred2
+    if (pred2.size() >= sizeof(int)) {
+        int key = *((int*)pred2.ptr(0));
+        minKey = min(minKey, key);
+        maxKey = max(maxKey, key);
+        keysFound = true;
+    }
+    
+    // 如果未找到任何键，使用默认值
+    if (!keysFound) {
+        minKey = 0;
+        maxKey = 0;
+    }
+    
+    // 检查BP是否需要更新
     bpChanged = false;
+    if (!bpIsValid || bp.size() < 2 * sizeof(int)) {
+        // BP无效或大小不正确，需要创建新的BP
+        bpChanged = true;
+    } else {
+        // 比较现有BP和新计算的范围
+        int* existingBP = (int*)bp.ptr(0);
+        if (existingBP[0] != minKey || existingBP[1] != maxKey) {
+            bpChanged = true;
+        }
+    }
+    
+    // 如果BP需要更新，写入新值
+    if (bpChanged) {
+        int* bpData = (int*)bp.ptr(0);
+        bpData[0] = minKey;
+        bpData[1] = maxKey;
+        
+        // 设置BP大小为8字节（两个整数）
+        bp.set(bp.ptr(0), 2 * sizeof(int));
+        
+        cout << "BP已更新: minKey=" << minKey << ", maxKey=" << maxKey << endl;
+    } else {
+        cout << "BP未改变: minKey=" << minKey << ", maxKey=" << maxKey << endl;
+    }
 }
 
 gist_cursorext_t*

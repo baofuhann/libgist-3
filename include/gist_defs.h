@@ -70,7 +70,7 @@ typedef int rc_t;
 
 #define ALIGNON 0x8
 #define ALIGNON1 (ALIGNON-1)
-#define align(sz) ((uint4)((sz + ALIGNON1) & ~ALIGNON1))
+#define align_size(sz) ((uint4)((sz + ALIGNON1) & ~ALIGNON1))
 
 #define W_DO(x) 	\
 {			\

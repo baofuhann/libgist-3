@@ -24,6 +24,7 @@
 #include <new>
 #include <math.h>
 #include <stdlib.h>
+#include <iomanip> 
 
 // VCPORT_B
 #ifdef WIN32
@@ -50,6 +51,9 @@ using namespace std;
 //#include "amdb_ext.h"
 #endif
 #include "gist.h"
+#include "pgm_index.hpp"	// for gist_p::max_tup_sz
+#include "piecewise_linear_model.hpp" // for piecewise linear model
+#include <iterator>
 
 
 // didn't know where else to put these
@@ -220,36 +224,9 @@ gist::create(
     W_DO(_file.create(filename, _ext));
     _isOpen = true;
 
-    // create the root page
     gist_p root;
     _new_page(rootNo, root, 1); // this is a leaf
-    assert(rootNo == root.pid());
-    _unfix_page(root);
-    W_DO(_file.flush());
-    return(RCOK);
-}
-/////////////////////////////////////////////////////////////////////////
-// create - create new alex index file
-//
-// Description:
-//	- initializes tree with empty root and flushes file
-//
-// Return Values:
-//      RCOK
-/////////////////////////////////////////////////////////////////////////
-rc_t
-gist::create(
-    const char*		filename,
-    gist_ext_t*		extension,
-    const char*     datafilename)
-{
-    _ext = extension;
-    W_DO(_file.create(filename, _ext));
-    _isOpen = true;
-
-    // create the root page
-    gist_p root;
-    _new_page(rootNo, root, 1); // this is a leaf
+    // 在_new_page调用后
     assert(rootNo == root.pid());
     _unfix_page(root);
     W_DO(_file.flush());
@@ -265,7 +242,7 @@ gist::create(
 //      RCOK
 /////////////////////////////////////////////////////////////////////////
 
-rc_t
+c_t
 gist::create(
     const char*		filename,
     gist_ext_t*		extension,
@@ -314,55 +291,174 @@ gist::create(
 
     // build tree level by level
     int level = 0;
-    for (;;) {
-        level++;
-	TupleStream tupStream;
-	void* streamParam;
-	if (level == 1) {
-	    // read from user-supplied tuple stream
-	    tupStream = s;
-	    streamParam = sParam;
-	} else {
-	    tupStream = _readBpFromTemp;
-	    streamParam = (void *) &bpInStream;
-	}
-	int pageCnt;
-	gist_p lastPage;
-	W_DO(_build_level(tupStream, streamParam, fillFactor, level, rootNo,
-	    bpOutStream, NULL, pageCnt, lastPage));
+    rc_t status;
+	gist_p page;
+    AlignedPred x, y;
+    int klen, dlen;
+    vec_t keyv, datav;
+    shpid_t child;
+    size_t epsilon_recursive = 4;
+    int last_n;
+    std::vector<pgm::Segment> segments;
+    std::vector<size_t> levels_offsets;
+    static constexpr int sentinel = std::numeric_limits<int>::has_infinity ? std::numeric_limits<int>::infinity()
+                                                                       : std::numeric_limits<int>::max();
 
-	bpInStream.close();
-	bpOutStream.close();
-	// VCPORT_B
-	// The state bits for the stream are not reset when file is close on NT
+    
+    std::vector<int> all_keys;
+    
+    TupleStream tupStream;
+    void* streamParam;
+    std::cout << "=== 收集 Level 1 的所有 key ===\n";
+    for (;;) { 
+        tupStream = s;
+        streamParam = sParam;
+        status = tupStream(x.pred, klen, y.pred, dlen, child, streamParam);
+        if (status != RCOK && status != ePAGEBREAK) break;
+        if (status == ePAGEBREAK) continue;
+
+        if (klen == sizeof(int)) {
+            int val;
+            memcpy(&val, x.pred, sizeof(int));
+            all_keys.push_back(val);
+        } else if (klen == sizeof(int) * 2) {
+            int low, high;
+            memcpy(&low, x.pred, sizeof(int));
+            memcpy(&high, (char*)x.pred + sizeof(int), sizeof(int));
+            all_keys.push_back(low);  // 或者取中点 (low + high) / 2
+        } else {
+            std::cout << "Unknown key format. klen = " << klen << "\n";
+        }
+    }
+
+    std::cout << "总共收集 key 数量：" << all_keys.size() << std::endl;
+
+    for (;;) {
+        bool breakPage = false;
+        auto first = all_keys.begin();
+        auto last = all_keys.end(); 
+
+        auto build_level = [&](auto epsilon, auto in_fun, auto out_fun, size_t last_n) {
+            auto n_segments = pgm::internal::make_segmentation_par(last_n, epsilon, in_fun, out_fun);
+            if (segments.back() == sentinel)
+                --n_segments;
+            else {
+                    if (segments.back()(sentinel - 1) < last_n)
+                        segments.emplace_back(*std::prev(last) + 1, 0, last_n); // Ensure keys > last are mapped to last_n
+                    segments.emplace_back(sentinel, 0, last_n);
+            }
+
+            return n_segments;
+        };
+        auto out_fun = [&](auto cs) { segments.emplace_back(cs); };
+        // level  = 1 叶子层的构建
+        tupStream = s;
+        streamParam = sParam;
+        W_DO(_prepare_page(page, rootNo, level)); // first page on level
+        std::cout << "============ 11Level " << level << " ==============" << std::endl;
+
+        assert(gist_p::rec_size(klen, dlen) <= gist_p::max_tup_sz);
+
+        const int epsilon = 128;
+        auto n = (size_t) std::distance(first, last);
+        std::cout << "当前的距离大小: " << n << std::endl;
+        int first_key = n ? *first : int(0);
+        /// Sentinel value to avoid bounds checking.
+        std::cout << "第一个 key: " << first_key << std::endl;
+
+        if (n == 0)
+            return;
+
+        levels_offsets.push_back(0);    
+        segments.reserve(n / (epsilon * epsilon));
+
+        if (*std::prev(last) == sentinel)
+            throw std::invalid_argument("The value " + std::to_string(sentinel) + " is reserved as a sentinel.");
+
+        auto in_fun = [&](auto i) { return int(first[i]); };
+        // auto out_fun = [&](auto cs) { segments.emplace_back(cs); };
+        last_n = build_level(epsilon, in_fun, out_fun, n);
+        levels_offsets.push_back(segments.size());
+
+        std::cout << "Level " << level << ": " << last_n << " segments\n";
+        for (size_t i = levels_offsets[levels_offsets.size() - 2]; i < levels_offsets.back(); ++i) {
+
+            int leafPageCnt = 1;
+            std::cout << "  Segment " << i << ": key = " << segments[i].key << "\n";
+            const auto& seg = segments[i];
+            struct {
+                float slope;
+                uint32_t intercept;
+            } seg_data = { seg.slope, seg.intercept };
+            std::cout << "slope = " << seg_data.slope << ", intercept = " << seg_data.intercept << std::endl;
+
+            vec_t keyv(&seg.key, sizeof(int));
+            vec_t datav(&seg_data, sizeof(seg_data));
+
+            // 第三步：插入 segment 到页中（作为 tuple）
+            W_DO(_ext->insert(page, keyv, datav, 0));
+            // 第四步：写出 BP 到临时文件（供上层使用）
+            W_DO(_finalize_page(page, bpOutStream));
+            _unfix_page(page);
+            W_DO(_prepare_page(page, rootNo, level));
+        }
+
+        // 其他层
+        while (epsilon_recursive && last_n > 1) {
+            int pageCnt = 0;
+            gist_p lastPage;
+            auto offset = levels_offsets[levels_offsets.size() - 2];
+            auto in_fun_rec = [&](auto i) { return segments[offset + i].key; };
+            last_n = build_level(epsilon_recursive, in_fun_rec, out_fun, last_n);
+            level++;
+            std::cout << "Level " << level << ": " << last_n << " segments\n";
+            for (size_t i = levels_offsets.back(); i < segments.size(); ++i) {
+                std::cout << "  Segment " << i << ": key = " << segments[i].key << "\n";
+                pageCnt++;
+                const auto& seg = segments[i];
+                struct {
+                    float slope;
+                    uint32_t intercept;
+                } seg_data = { seg.slope, seg.intercept };
+                std::cout << "slope = " << seg_data.slope << ", intercept = " << seg_data.intercept << std::endl;
+    
+                vec_t keyv(&seg.key, sizeof(seg.key));
+                vec_t datav(&seg_data, sizeof(seg_data));
+                std::cout << "datav.len(0) = " << datav.len(0) << "sizeof(int) = " << sizeof(int)<< std::endl;
+
+                W_DO(_prepare_page(lastPage, rootNo, level));
+                // 第三步：插入 segment 到页中（作为 tuple）
+                W_DO(_ext->insert(lastPage, keyv, datav, 0));
+                // 第四步：写出 BP 到临时文件（供上层使用）
+                W_DO(_finalize_page(lastPage, bpOutStream));
+                if (last_n = 1) {
+                    break;
+                }
+                _unfix_page(lastPage);
+            }
+            levels_offsets.push_back(segments.size());
+            // 根页面处理
+            if (last_n = 1) {
+                gist_p rootPage;
+                W_DO(_fix_page(rootPage, rootNo, LATCH_EX));
+                W_DO(lastPage.copy(rootPage));
+                rootPage.set_level(level);
+                _unfix_page(rootPage);
+                W_DO(_file.freePage(lastPage._descr));
+                lastPage._pp = NULL;
+                // remove temp files
+                if (unlink(temp1) != 0) return(eFILEERROR);
+                if (unlink(temp2) != 0) return(eFILEERROR);
+
+                flush();
+                return(RCOK);
+	        }
+        
+        }
 #ifdef WIN32
 	bpInStream.clear();
 	bpOutStream.clear();
 #endif
-	// VCPORT_E
-
-	if (pageCnt == 1) {
-	    // The last level we produced contains only 1 page: this
-	    // is the root level. We must copy the last page of this
-	    // level to the (fixed-location) root page, adjust the
-	    // level in the root page's header and then delete the
-	    // last page.
-	    gist_p rootPage;
-	    W_DO(_fix_page(rootPage, rootNo, LATCH_EX));
-	    W_DO(lastPage.copy(rootPage));
-	    rootPage.set_level(level);
-	    _unfix_page(rootPage);
-	    W_DO(_file.freePage(lastPage._descr));
-	    lastPage._pp = NULL;
-
-	    // remove temp files
-	    if (unlink(temp1) != 0) return(eFILEERROR);
-	    if (unlink(temp2) != 0) return(eFILEERROR);
-
-	    flush();
-	    return(RCOK);
-	}
-
 	// switch BP input and output for the next level
 	toTemp1 = (toTemp1 ? false : true);
 	if (toTemp1) {
@@ -392,7 +488,6 @@ gist::create(
     // can't get here
     return(RCOK);
 }
-
 
 /////////////////////////////////////////////////////////////////////////
 // _locate_leaf - descend to leaf along minimum-penalty path
@@ -1229,13 +1324,18 @@ gist::fetch_init(
 	_profile->addQuery();
     }
 #endif
-
     // we assume that remnants from prior searches have been erased already
     cursor.query = query;
+    cout << "fetch_init: cursor.query = query" << endl;
     cursor.k = (k < 1) ? MAXINT : k;
+    cout << "fetch_init: cursor.k = " << cursor.k << endl;
     cursor.io = (io < 1) ? MAXINT : io;
+    cout << "fetch_init: cursor.io = " << cursor.io << endl;
     cursor.cext = cursor.ext->queryCursor(query);
+    cout << "fetch_init: cursor.cext = cursor.ext->queryCursor(query)" << endl;
     cursor.cext->iter_init(cursor, rootNo);
+
+    cout << "fetch_init: cursor.cext->iter_init() called" << endl;
 
     return RCOK;
 }
@@ -1876,6 +1976,9 @@ gist::_finalize_page(
     gist_p& 	page,
     ostream&	outStream) // receives BPs of finished pages
 {
+    // 添加调试输出
+    cout << "=== _finalize_page 开始执行 ===" << endl;
+    cout << "页面ID: " << page.pid() << ", 记录数: " << page.nrecs() << endl;
     // compute the BP - even if we have already computed one, it may
     // have been computed incrementally, so compute a tight one now.
     vec_t dummyPred;
@@ -1884,12 +1987,37 @@ gist::_finalize_page(
     vec_t bpv(x.pred, gist_p::max_tup_sz);
     _ext->unionBp(page, bpv, false, vec_t(), vec_t(), dummy);
 
+    // 添加调试输出
+    cout << "计算得到的BP大小: " << bpv.size() << " 字节" << endl;
+    // 如果BP是整数类型，可以尝试显示其值
+    if (bpv.size() >= 4) {
+        int* bp_value = (int*)bpv.ptr(0);
+        cout << "BP值(如果是整数): " << *bp_value << endl;
+    }
+
+    // 打印BP的十六进制表示（前16字节）
+    cout << "BP内容(十六进制): ";
+    unsigned char* bp_bytes = (unsigned char*)bpv.ptr(0);
+    for (int i = 0; i < bpv.size() && i < 16; i++) {
+        printf("%02X ", bp_bytes[i]);
+    }
+    cout << endl;
+
     // write to outStream
     int len = bpv.size();
+    cout << "写入长度: " << len << endl;
     outStream.write((char *) &len, sizeof(len));
     outStream.write((char *) bpv.ptr(0), len);
     shpid_t pageno = page.pid();
+    cout << "写入页面ID: " << pageno << endl;
     outStream.write((char *) &pageno, sizeof(pageno));
+
+    // 检查输出流状态
+    cout << "输出流状态: good=" << outStream.good() 
+         << ", fail=" << outStream.fail() 
+         << ", bad=" << outStream.bad() << endl;
+    
+    cout << "=== _finalize_page 执行完成 ===" << endl;
 
     return RCOK;
 }
@@ -1934,9 +2062,12 @@ gist::_build_level(
     int itemCnt = 0;
 
     rc_t status;
+    // 初始化当前页面
     W_DO(_prepare_page(page, rootPid, level)); // first page on level
     pageCnt = 1;
     bool breakPage = false;
+    // 批处理流式数据的循环，用来逐条读取 tuple 并处理。
+    // 负责把一层的数据写成多个 page（页），并输出 Boundary Predicate（BP）信息，用于上层节点构建。
     for (;;) {
 	status = tupStream(x.pred, klen, y.pred, dlen, child, streamParam);
 	if (status != RCOK && status != ePAGEBREAK) {
@@ -1948,7 +2079,6 @@ gist::_build_level(
 	    breakPage = true;
 	    continue; // for
 	}
-
 	assert(gist_p::rec_size(klen, dlen) <= gist_p::max_tup_sz);
 
 	// create a new page if the parse routine returned an
@@ -1958,6 +2088,8 @@ gist::_build_level(
 	// not be the case, if we compress records in some way; it
 	// seems to be a conservative assumption, because the
 	// "compressed" storage shouldn't blow records up).
+    
+    // 判断是否要启动一个新的 page
         if (breakPage ||
 	    ((int) page.usable_space() -
 	    (int) gist_p::rec_size(klen, dlen) <= minFreeSpace)) {
@@ -1967,6 +2099,7 @@ gist::_build_level(
 	    if (!breakPage && breakNotify != NULL) {
 	        breakNotify(itemCnt, streamParam);
 	    }
+        // Flush 当前页（写入磁盘 + 写出 BP）
 	    W_DO(_finalize_page(page, bpOutStream));
 	    _unfix_page(page);
 	    W_DO(_prepare_page(page, rootPid, level));
@@ -1981,7 +2114,8 @@ gist::_build_level(
 	status = _ext->insert(page, keyv, datav, child);
 	if (status != RCOK) return status;
 	itemCnt++;
-    }
+}
+
     if (status != eEOF) return status;
     if (itemCnt == 0) return eFILEERROR; // can't have empty level
     W_DO(_finalize_page(page, bpOutStream)); // last page
@@ -1989,6 +2123,7 @@ gist::_build_level(
 
     return RCOK;
 }
+
 
 
 /////////////////////////////////////////////////////////////////////////
@@ -2022,7 +2157,6 @@ gist::_readBpFromTemp(
     s->read((void *) &klen, sizeof(klen));
 #endif
 // VCPORT_E
-
     if (s->eof()) return(eEOF);
 
 // VCPORT_B
@@ -2033,6 +2167,21 @@ gist::_readBpFromTemp(
     s->read(key, klen);
 #endif
 // VCPORT_E
+    // 添加调试代码，输出key的值
+    // 如果key是整数类型
+    if (klen == sizeof(int)) {
+        int keyValue = *((int*)key);
+        cout << "读取到key值: " << keyValue << ", klen=" << klen << endl;
+    } else {
+        // 如果key不是整数，可以以十六进制形式打印出来
+        cout << "读取到key值(十六进制): ";
+        unsigned char* keyBytes = (unsigned char*)key;
+        for (int i = 0; i < klen && i < 16; i++) { // 最多显示16字节
+            printf("%02X ", keyBytes[i]);
+        }
+        cout << ", klen=" << klen << endl;
+    }
+
 
     dlen = 0;
 

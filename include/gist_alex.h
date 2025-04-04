@@ -10,18 +10,40 @@
 
 #include "gist_p.h"		// for keyrec_t
 #include "gist_query.h"		// for gist_query_t
-
+#include "gist_ext.h"		// for gist_ext_t
+// #include "alex.h"
 // // VCPORT_B
 // #ifndef WIN32
 // class ostream;
 // #endif
 // // VCPORT_E
 #include <iostream>
+#include "alex_base.h"
+// #include <alex.h>
 using namespace std; 
 
 class gist_p;
 class vec_t;
 class gist_cursorext_t;
+
+struct DataNodeStats {
+    double num_search_iterations = 0; // 平均搜索迭代次数
+    double num_shifts = 0;            // 平均移动次数
+};
+
+// Used when stats are computed using a sample
+struct SampleDataNodeStats {
+    double log2_sample_size = 0;
+    double num_search_iterations = 0;
+    double log2_num_shifts = 0;
+};
+
+struct DerivedParamss {
+    // The defaults here assume the default max node size of 16MB
+    int max_fanout = 1 << 21; // assumes 8-byte pointers
+    int max_data_node_slots = (1 << 18) / sizeof(int);
+  };
+
 
 class alex_query_t : public gist_query_t {
 public:
@@ -82,6 +104,27 @@ public:
     typedef void (*NegInftyFct)(void *x);
     NegInftyFct negInftyKey, negInftyData;
 
+    struct Params {
+        // When bulk loading, Alex can use provided knowledge of the expected
+        // fraction of operations that will be inserts
+        // For simplicity, operations are either point lookups ("reads") or inserts
+        // ("writes)
+        // i.e., 0 means we expect a read-only workload, 1 means write-only
+        double expected_insert_frac = 1;
+        // Maximum node size, in bytes. By default, 16MB.
+        // Higher values result in better average throughput, but worse tail/max
+        // insert latency
+        int max_node_size = 1 << 24;
+        // Approximate model computation: bulk load faster by using sampling to
+        // train models
+        bool approximate_model_computation = true;
+        // Approximate cost computation: bulk load faster by using sampling to
+        // compute cost
+        bool approximate_cost_computation = false;
+      };
+      // 后置下划线: 表明 params_ 是类 Alex 的成员变量
+      Params params_;
+
     alex_ext_t(
         gist_ext_t::gist_ext_ids id,
 	const char* name,
@@ -101,8 +144,13 @@ public:
 	// values should be the sorted array of key-payload pairs.
   	// The number of elements should be num_keys.
   	// The index must be empty when calling this method.
-	void bulk_load(const int values, int num_keys);
+	// void bulk_load(const int values, int num_keys);
+    rc_t bulk_load(gist_p& page,const vector<int>& keys, const vector<int>& values);
 	// void bulk_load(int num_keys) {}
+    rc_t bulk_load_node(const std::pair<int,int>* values, int num_keys, gist_p& page,
+        int total_keys, PhyscialAddr *r_addr, uint8_t duplication_factor_,
+        double expected_avg_exp_search_iterations_, double expected_avg_shifts_,
+        const alex::LinearModel<int>* data_node_model = nullptr);
 
     rc_t insert(
         gist_p& page,
@@ -165,6 +213,35 @@ public:
 	const vec_t& pred,
 	int level);
 
+    // add compute_expected_cost
+    static double compute_expected_cost( const std::pair<int,int>* values,
+        int num_keys,
+        double density,
+        double expected_insert_frac,
+        const  alex::LinearModel<int>* existing_model = nullptr, bool use_sampling = false,
+        DataNodeStats* stats = nullptr);
+
+    static void build_model(const std::pair<int,int>* values, int num_keys, alex::LinearModel<int>* model,
+        bool use_sampling = false);
+    static void build_model_sampling (const std::pair<int,int>* values, int num_keys,
+        alex::LinearModel<int>* model,bool verbose = false);
+    // Helper function for compute_expected_cost
+  // Implicitly build the data node in order to collect the stats
+  static void build_node_implicit(const std::pair<int,int>* values, int num_keys,
+    int data_capacity, alex::StatAccumulator* acc,
+    const alex::LinearModel<int>* model);
+
+static double compute_expected_cost_sampling(
+    const std::pair<int,int>* values, int num_keys, double density,
+        double expected_insert_frac,
+        const alex::LinearModel<int>* existing_model = nullptr,
+        DataNodeStats* stats = nullptr);
+static void build_node_implicit_sampling(const std::pair<int,int>* values,int num_keys,
+    int sample_num_keys,
+    int sample_data_capacity,
+    int step_size, alex::StatAccumulator* ent,
+    const alex::LinearModel<int>* sample_model);
+
 private:
 
     // Finds the first slot on the page with an equal key (and data, if 'data'
@@ -177,21 +254,50 @@ private:
 	bool keyOnly);
 
 
-   /* Statistics related to the key domain.
-   * The index can hold keys outside the domain, but lookups/inserts on those
-   * keys will be inefficient.
-   * If enough keys fall outside the key domain, then we expand the key domain.
-   */
-	// struct InternalStats {
-	// 	T key_domain_min_ = std::numeric_limits<T>::max();   // 当前键域的最小值
-	// 	T key_domain_max_ = std::numeric_limits<T>::lowest(); // 当前键域的最大值
-	// 	int num_keys_above_key_domain = 0;                    // 超出右侧键域的键数量
-	// 	int num_keys_below_key_domain = 0;                    // 超出左侧键域的键数量
-	// 	int num_keys_at_last_right_domain_resize = 0;         // 上次向右扩展时的总键数
-	// 	int num_keys_at_last_left_domain_resize = 0;          // 上次向左扩展时的总键数
-	// 	T min_key_in_left = std::numeric_limits<T>::max();    // 左侧扩展后的新最小值
-	// 	T max_key_in_right = std::numeric_limits<T>::lowest();// 右侧扩展后的新最大值
-	// };
+    struct Stats {
+        // 构造函数：在初始化列表中完成所有成员变量初始化
+        Stats()
+            : num_keys(0),
+              num_model_nodes(0),
+              num_data_nodes(0),
+              num_expand_and_scales(0),
+              num_expand_and_retrains(0),
+              num_downward_splits(0),
+              num_sideways_splits(0),
+              num_model_node_expansions(0),
+              num_model_node_splits(0),
+              num_downward_split_keys(0),
+              num_sideways_split_keys(0),
+              num_model_node_expansion_pointers(0),
+              num_model_node_split_pointers(0),
+              num_node_lookups(0),
+              num_lookups(0),
+              num_inserts(0),
+              splitting_time(0),
+              cost_computation_time(0) {}
+    
+        int num_keys;
+        int num_model_nodes;
+        int num_data_nodes;
+        int num_expand_and_scales;
+        int num_expand_and_retrains;
+        int num_downward_splits;
+        int num_sideways_splits;
+        int num_model_node_expansions;
+        int num_model_node_splits;
+        long long num_downward_split_keys;
+        long long num_sideways_split_keys;
+        long long num_model_node_expansion_pointers;
+        long long num_model_node_split_pointers;
+        mutable long long num_node_lookups;
+        mutable long long num_lookups;
+        long long num_inserts;
+        double splitting_time;
+        double cost_computation_time;
+    };
+
+    Stats stats_;
+    
 
     struct PosInfo {
         const keyrec_t* hdr;
@@ -205,7 +311,6 @@ private:
 	keyrec_t::hdr_s& hdr1,
 	keyrec_t::hdr_s& hdr2,
 	PosInfo entries[]);
-
 };
 
 extern alex_ext_t alex_ext;

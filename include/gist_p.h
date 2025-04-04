@@ -13,6 +13,20 @@
 #include "gist_defs.h"		// for shpid_t
 #include "vec_t.h"		// for cvec_t
 #include "gist_file.h"		// for gist_file::page_descr
+#include <iostream>
+#include "alex_base.h"
+
+using namespace std;
+
+typedef struct {
+    int flag;
+//    int test;
+    int block;
+    int offset;
+    uint8_t duplication_factor_;
+} PhyscialAddr;
+#define PhyscialAddrSize sizeof(PhyscialAddr)
+
 
 class gist;
 
@@ -68,6 +82,7 @@ struct page_s {
     slot_t	slot[1];		// 1st slot
 };
 
+
 class keyrec_t {
 public:
 
@@ -97,15 +112,23 @@ private:
 struct gistctrl_t {
     shpid_t	root;
     int2	level;	// leaf if 1, non-leaf if > 1
+    // 添加模型和成本字段
+    // bool    is_model_node;  // 标记是否是模型节点
+    // double cost;  // 存储节点的期望成本或经验成本
+
+    // ALEX特有控制信息
+    alex::LinearModel<int> _model;  // 存储页面的线性模型
+    int        min_key;        // 当前节点管理的最小键
+    int       max_key;        // 当前节点管理的最大键
+    int4    num_children;   // 子页面数量
 
     gistctrl_t();
 };
 
 
-
 class gist_p {
 public:
-    
+
     typedef page_s::slot_t slot_t;
 
     enum {
@@ -136,6 +159,9 @@ public:
     rc_t			set_hdr(const gistctrl_t& new_hdr);
     void			set_level(int2 level);
     int 			level() const;
+    // double          get_cost() const;
+    // void            set_cost(double new_cost);
+
     shpid_t			root() const;
 
     bool 			is_leaf() const;
@@ -163,8 +189,14 @@ public:
     smsize_t			usable_space();
     shpid_t 			pid() const;
 
+    rc_t set_page_model(double a, double b); // 增加访问页面的模型参数的接口
+    const alex::LinearModel<int>& get_model();
+
+
 private:
     static const int _HDR_CORRECTION;
+    // 添加 ALEX 的初始密度常量
+    
         // = 1: add to slot indices to compensate for hdr entry
 
     rc_t			_insert_expand(
@@ -217,13 +249,14 @@ inline shpid_t
 gist_p::root() const
 {
     gistctrl_t* hdr = (gistctrl_t *) _get_hdr();
+    cout << "hdr 地址: " << &hdr << endl;
     return hdr->root;
 }
 
 inline int
 gist_p::rec_size(size_t klen, size_t dlen)
 {
-    return int(align(klen + dlen + sizeof(keyrec_t::hdr_s)) + sizeof(slot_t));
+    return int(align_size(klen + dlen + sizeof(keyrec_t::hdr_s)) + sizeof(slot_t));
 }
 
 #endif /*GIST_P_H*/

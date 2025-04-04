@@ -113,12 +113,11 @@ static rc_t Insert(gist& index, int key, int data) {
 }
 
 int main(){
-  cout << "Test libgist for B-Tree" << endl;
+  cout << "Test libgist for ALEX" << endl;
   gist index;
   ifstream indexfile(INDEXFILENAME);
   if(!indexfile.good()){
-    cout << "Creating a new GiST-Btree index file " << endl;
-    rc_t status = index.create(INDEXFILENAME, &alex_ext,"datafile");
+    rc_t status = index.create(INDEXFILENAME, &alex_ext,"data/btreedata.txt");
     if (status != RCOK) {
       cerr << "Error creating " << INDEXFILENAME << endl;
       return 1;

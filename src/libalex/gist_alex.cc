@@ -18,12 +18,17 @@ using namespace std;
 #include "gist_cursorext.h"	// for gist_cursorext_t::*
 #include "gist_support.h"	// for print<>, parse<>, etc.
 #include <assert.h>
-// #include <alex_base.h>
+#include "alex.h"
+#include "alex_base.h"
+#include "alex_fanout_tree.h"
 
 
 #define DiskSetting 0
 #define _Debug 0
 #define Profiling 0
+
+DerivedParamss derived_paramss_;
+
 
 alex_query_t::alex_query_t(bt_oper oper, void *val1, void *val2)
     : oper(oper), val1(val1), val2(val2)
@@ -45,7 +50,7 @@ int_cmp(const void *a, const void *b)
     (void) memcpy((void *) &x, a, sizeof(x));
     (void) memcpy((void *) &y, b, sizeof(y));
     // 输出比较的内容
-    cout << "正在比较: " << x << " 和 " << y << endl;
+    // cout << "正在比较: " << x << " 和 " << y << endl;
     if (x < y) { 
         return -1;
     } else if (x > y) {
@@ -114,66 +119,632 @@ alex_ext_t::alex_ext_t(
 //     
 ///////////////////////////////////////////////////////////////////////////////
 
-void bulk_load(const int values, int num_keys){
-    cout << "=== Starting ALEX Bulk Load Process ===" << endl;
+rc_t 
+alex_ext_t::bulk_load(gist_p& page,const vector<int>& keys, const vector<int>& values){
 
-    if (stats_.num_keys > 0 || num_keys <= 0) {
-      return;
-    }
-
-    delete_node(page);  // delete the empty root node
-
-    stats_.num_keys = num_keys;
-
-    // Build temporary root model, which outputs a CDF in the range [0, 1]
-    std::cout << "\n2. Root Node Creation:" << std::endl;
-    root_node_ =
-        new (model_node_allocator().allocate(1)) model_node_type(0, allocator_);
-    T min_key = values[0].first;
-    T max_key = values[num_keys - 1].first;
-    root_node_->model_.a_ = 1.0 / (max_key - min_key);
-    root_node_->model_.b_ = -1.0 * min_key * root_node_->model_.a_;
-
-    // Compute cost of root node
-    LinearModel<T> root_data_node_model;
-    data_node_type::build_model(values, num_keys, &root_data_node_model,
-                                params_.approximate_model_computation);
-    DataNodeStats stats;
-    root_node_->cost_ = data_node_type::compute_expected_cost(
-        values, num_keys, data_node_type::kInitDensity_,
-        params_.expected_insert_frac, &root_data_node_model,
-        params_.approximate_cost_computation, &stats);
-    // Recursively bulk load
-    PhyscialAddr RootNodeDisk;
-    bulk_load_node(values, num_keys, root_node_, num_keys, &RootNodeDisk,
-                   0, 0, 0,
-                   &root_data_node_model);
+    cout << "=== 1. Starting ALEX Bulk Load Process ===" << endl;
     
-    if (root_node_->is_leaf_) {
-      static_cast<data_node_type*>(root_node_)
-          ->expected_avg_exp_search_iterations_ = stats.num_search_iterations;
-      static_cast<data_node_type*>(root_node_)->expected_avg_shifts_ =
-          stats.num_shifts;
-    }
-    create_superroot();
-    update_superroot_key_domain();
-//    link_all_data_nodes();
-#if DiskSetting
-    std::cout << RootNodeDisk.flag << std::endl;
-    metanode.root_block_id = RootNodeDisk.block;
-    metanode.root_offset = RootNodeDisk.offset;
-    metanode.is_leaf = RootNodeDisk.flag;
-    metanode.dup_root = RootNodeDisk.duplication_factor_;
-    sync_metanode();
-    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-        node_it.next()) {
-        if (node_it.current()->is_leaf_ && hybrid_mode == LEAF_DISK)
-            delete_node(node_it.current());
-        else if (hybrid_mode == ALL_DISK) delete_node(node_it.current());
-    }
-#endif
+    int num_keys = keys.size();
 
+    std::pair<int, int>* pairs = new std::pair<int, int>[num_keys];
+    for (int i = 0; i < num_keys; i++) {
+        pairs[i] = std::make_pair(keys[i], values[i]);
+    }
+
+
+    cout << "=== 2. Sorting key-value pairs ===" << endl;
+    std::sort(pairs, pairs + num_keys, 
+        [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+            return a.first < b.first;
+        });
+
+    cout << "=== 3. Initializing learned index root node ===" << endl;
+    gistctrl_t new_hdr;
+  
+    // // Build temporary root model, which outputs a CDF in the range [0, 1]
+
+    int min_key = pairs[0].first;
+    int max_key = pairs[num_keys - 1].first;
+    cout << "Minimum key: " << min_key << std::endl;
+    cout << "Maximum key: " << max_key << std::endl;
+
+    cout << "page 地址: " << &page << endl;
+    // new_hdr.root = page.root();
+    // new_hdr.level = page.level();
+    
+
+    // new_hdr.is_model_node = true;
+    // new_hdr.num_children = 0;
+
+    double model_a = 1.0 / (max_key - min_key);
+    double model_b = -1.0 * min_key * model_a;
+
+    // 输出计算出的初始模型参数
+    cout << "\n=== 4. Initial Model Parameters ===" << endl;
+    cout << "model_a (slope): " << model_a << endl;
+    cout << "model_b (intercept): " << model_b << endl;
+
+    W_DO(page.set_page_model(model_a, model_b));
+    
+
+    // rootalex.root_node_->model_.a_ = 1.0 / (max_key - min_key);
+    // rootalex.root_node_->model_.b_ = -1.0 * min_key * rootalex.root_node_->model_.a_;
+
+    // 2. 训练根节点模型
+    // alex::LinearModel<int> root_data_node_model;
+    // alex::LinearModelBuilder<int> model_builder(&root_data_node_model);
+    // for (size_t i = 0; i < keys.size(); ++i) {
+    //     model_builder.add(keys[i], i); // 键值映射到位置i
+    // }
+    // model_builder.build();
+
+    // 测试初始模型
+    cout << "\n=== 5. Testing Initial Model ===" << endl;
+
+    // for (size_t i = 0; i < keys.size(); ++i) {
+    //     double predicted_pos = root_data_node_model.predict(keys[i]);
+    //     double error = abs(predicted_pos - i);
+
+        // 只打印部分结果以避免输出过多
+        // if (i < 5 || i > keys.size() - 5 || i == keys.size() / 2) {
+        //     cout << "Key: " << keys[i] << ", Actual pos: " << i 
+        //          << ", Predicted pos: " << predicted_pos 
+        //          << ", Error: " << error << endl;
+        // }
+
+    // }
+
+
+    DataNodeStats stats;
+
+    // // 计算成本
+    // double page_cost = compute_expected_cost(
+    //     pairs,
+    //     num_keys,
+    //     gist_p::kInitDensity_,
+    //     params_.expected_insert_frac,
+    //     &root_data_node_model,
+    //     params_.approximate_cost_computation,
+    //     &stats
+    // );
+
+    // cout << "Page cost: " << page_cost << endl;
+
+    // 设置页面成本
+    // page.set_cost(page_cost);
+    // 6.4 计算键范围边界
+    // int fanout = 2;
+
+    // vector<double> boundaries(fanout + 1);
+    // for (int i = 0; i <= fanout; ++i) {
+    //     double pos = static_cast<double>(i) / fanout;
+    //     boundaries[i] = (pos - model_b) / model_a;
+    // }
+
+    // // 6.5 递归构建子页面
+    // int cur_pos = 0;
+    // for (int i = 0; i < fanout; ++i) {
+    //     // 计算当前子页面的键范围
+    //     double lower = boundaries[i];
+    //     double upper = boundaries[i + 1];
+    //     // 收集属于该范围的键值对
+    //     vector<int> child_keys, child_values;
+    //     while (cur_pos < num_keys && pairs[cur_pos].first < upper) {
+    //         child_keys.push_back(pairs[cur_pos].first);
+    //         child_values.push_back(pairs[cur_pos].second);
+    //         cur_pos++;
+    //     }
+        // 分配子页面
+        // gist_p child_page;
+        // W_DO(child_page.format(child_page.pid(), hdr));
+    // }
+
+    // hdr->_model = alex::LinearModel<int>(model_a, model_b);
+    // stats_.num_model_nodes++;
+//       auto model_node = new (model_node_allocator().allocate(1))
+//           model_node_type(node->level_, allocator_);
+//       if (best_fanout_tree_depth == 0) {
+//         // slightly hacky: we assume this means that the node is relatively
+//         // uniform but we need to split in
+//         // order to satisfy the max node size, so we compute the fanout that
+//         // would satisfy that condition
+//         // in expectation
+//         // 计算扇出数(fanout = 2^depth)
+//         best_fanout_tree_depth =
+//             static_cast<int>(std::log2(static_cast<double>(num_keys) /
+//                                        derived_params_.max_data_node_slots)) +
+//             1;
+//         used_fanout_tree_nodes.clear();
+//         int max_data_node_keys = static_cast<int>(
+//             derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
+//         fanout_tree::compute_level<T, P>(
+//             values, num_keys, node, total_keys, used_fanout_tree_nodes,
+//             best_fanout_tree_depth, max_data_node_keys,
+//             params_.expected_insert_frac, params_.approximate_model_computation,
+//             params_.approximate_cost_computation);
+//       }
+//       int fanout = 1 << best_fanout_tree_depth;
+//       model_node->model_.a_ = node->model_.a_ * fanout;
+//       model_node->model_.b_ = node->model_.b_ * fanout;
+//       model_node->num_children_ = fanout;
+//       model_node->children_ =
+//           new (pointer_allocator().allocate(fanout)) AlexNode<T, P>*[fanout];
+
+//       //#if DiskSetting
+//       model_node->childrenAddrs = new PhyscialAddr[fanout];
+//       //#endif
+//       if (hybrid_mode == LEAF_DISK) {
+//           model_node->is_leaf = new int[fanout];;
+//           for (int i = 0; i < fanout; i++) {
+//               // 0 is model 1 is leaf
+//               model_node->is_leaf[i] = 0;
+//           }
+//       }
+//       // Instantiate all the child nodes and recurse
+//       int cur = 0;
+//       for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {
+//         auto child_node = new (model_node_allocator().allocate(1))
+//             model_node_type(static_cast<short>(node->level_ + 1), allocator_);
+//         child_node->cost_ = tree_node.cost;
+//         child_node->duplication_factor_ =
+//             static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
+//         int repeats = 1 << child_node->duplication_factor_;
+//         double left_value = static_cast<double>(cur) / fanout;
+//         double right_value = static_cast<double>(cur + repeats) / fanout;
+//         double left_boundary = (left_value - node->model_.b_) / node->model_.a_;
+//         double right_boundary =
+//             (right_value - node->model_.b_) / node->model_.a_;
+//         child_node->model_.a_ = 1.0 / (right_boundary - left_boundary);
+//         child_node->model_.b_ = -child_node->model_.a_ * left_boundary;
+//         model_node->children_[cur] = child_node;
+//         LinearModel<T> child_data_node_model(tree_node.a, tree_node.b);
+//         bool is_leaf = bulk_load_node(values + tree_node.left_boundary,
+//                        tree_node.right_boundary - tree_node.left_boundary,
+//                        model_node->children_[cur], total_keys, // here we write the pointer for model node
+//                        &(model_node->childrenAddrs[cur]), // here we write the location for leaf node
+//                        static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level),
+//                        tree_node.expected_avg_search_iterations,
+//                        tree_node.expected_avg_shifts,
+//                        &child_data_node_model);
+//         model_node->children_[cur]->duplication_factor_ =
+//             static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
+//         if (model_node->children_[cur]->is_leaf_) {
+//           static_cast<data_node_type*>(model_node->children_[cur])
+//               ->expected_avg_exp_search_iterations_ =
+//               tree_node.expected_avg_search_iterations;
+//           static_cast<data_node_type*>(model_node->children_[cur])
+//               ->expected_avg_shifts_ = tree_node.expected_avg_shifts;
+//         }
+//         if (is_leaf && hybrid_mode == LEAF_DISK) {
+//             model_node->is_leaf[cur] = 1;
+//         }
+//         // if the returned one is leaf,
+//         for (int i = cur + 1; i < cur + repeats; i++) {
+//             // set flag
+//             if (is_leaf && hybrid_mode == LEAF_DISK) model_node->is_leaf[i] = 1;
+//             model_node->children_[i] = model_node->children_[cur];
+//           #if DiskSetting
+//             model_node->childrenAddrs[i] = model_node->childrenAddrs[cur];
+//           #endif
+//         }
+//         cur += repeats;
+//       }
+
+//       delete_node(node);
+//       node = model_node;
+
+//       return false;
   }
+
+    // the return flag shows the built node is model or leaf
+    rc_t alex_ext_t::bulk_load_node(const std::pair<int,int>* values, int num_keys, gist_p& page,
+        int total_keys, PhyscialAddr *r_addr, uint8_t duplication_factor_,
+        double expected_avg_exp_search_iterations_, double expected_avg_shifts_,
+        const alex::LinearModel<int>* data_node_model = nullptr){
+
+            std::vector<alex::fanout_tree::FTNode> used_fanout_tree_nodes;
+            std::pair<int, double> best_fanout_stats;
+            best_fanout_stats = alex::fanout_tree::find_best_fanout_top_down<int, int>(
+                values, num_keys,page,total_keys,used_fanout_tree_nodes,derived_paramss_.max_fanout, 
+                params_.expected_insert_frac,params_.approximate_model_computation,
+                params_.approximate_cost_computation);
+            int best_fanout_tree_depth = best_fanout_stats.first;
+            double best_fanout_tree_cost = best_fanout_stats.second;
+
+             // Decide whether this node should be a model node or data node
+            // if (best_fanout_tree_cost < page.get_cost() ||
+            //     num_keys > derived_paramss_.max_data_node_slots *
+            //                     gist_p::kInitDensity_) {
+                // std::cout << "best_fanout_tree_cost: " << best_fanout_tree_cost << std::endl;
+                // std::cout << "page.get_cost(): " << page.get_cost() << std::endl;
+                // std::cout << "num_keys: " << num_keys << std::endl;
+                // std::cout << "derived_paramss_.max_data_node_slots: " << derived_paramss_.max_data_node_slots << std::endl;
+                // std::cout << "gist_p::kInitDensity_: " << gist_p::kInitDensity_ << std::endl;
+                // std::cout << "max_slots * kInitDensity_: " << derived_paramss_.max_data_node_slots * gist_p::kInitDensity_ << std::endl;
+                // Convert to model node based on the output of the fanout tree
+                // cout << "Converting to model node:"<< stats_.num_model_nodes << endl;
+                // stats_.num_model_nodes++;
+                // cout << "Converting to model node:"<< stats_.num_model_nodes << endl;
+                // // 1. 创建新的模型节点页面
+                // gist_p model_page;
+            // }
+
+
+    }
+
+  ///////////////////////////////////////////////////////////////////////////////
+// gist_alex::add compute_expected_cost function
+//
+// Description:
+//	- Computes the expected cost of a data node constructed using the input dense
+//  array of keys
+//  Assumes existing_model is trained on the dense array of keys
+// Return Values:
+//      double
+///////////////////////////////////////////////////////////////////////////////
+
+  static double alex_ext_t::compute_expected_cost(
+    const std::pair<int,int>* values,
+    int num_keys,
+    double density,
+    double expected_insert_frac,
+    const  alex::LinearModel<int>* existing_model = nullptr, bool use_sampling = false,
+    DataNodeStats* stats = nullptr)
+{
+    if (use_sampling) {
+        return compute_expected_cost_sampling(values, num_keys, density,
+                                              expected_insert_frac,
+                                              existing_model, stats);
+      }
+  
+      if (num_keys == 0) {
+        return 0;
+      }
+  
+      int data_capacity =
+          std::max(static_cast<int>(num_keys / density), num_keys + 1);
+  
+      // Compute what the node's model would be
+      alex::LinearModel<int> model;
+      if (existing_model == nullptr) {
+        build_model(values, num_keys, &model);
+      } else {
+        model.a_ = existing_model->a_;
+        model.b_ = existing_model->b_;
+      }
+      model.expand(static_cast<double>(data_capacity) / num_keys);
+  
+      // Compute expected stats in order to compute the expected cost
+      double cost = 0;
+      double expected_avg_exp_search_iterations = 0;
+      double expected_avg_shifts = 0;
+      if (expected_insert_frac == 0) {
+        alex::ExpectedSearchIterationsAccumulator acc;
+        build_node_implicit(values, num_keys, data_capacity, &acc, &model);
+        expected_avg_exp_search_iterations = acc.get_stat();
+      } else {
+        alex::ExpectedIterationsAndShiftsAccumulator acc(data_capacity);
+        build_node_implicit(values, num_keys, data_capacity, &acc, &model);
+        expected_avg_exp_search_iterations =
+            acc.get_expected_num_search_iterations();
+        expected_avg_shifts = acc.get_expected_num_shifts();
+      }
+      cost = alex::kExpSearchIterationsWeight * expected_avg_exp_search_iterations +
+      alex::kShiftsWeight * expected_avg_shifts * expected_insert_frac;
+  
+      if (stats) {
+        stats->num_search_iterations = expected_avg_exp_search_iterations;
+        stats->num_shifts = expected_avg_shifts;
+      }
+
+      return cost;
+
+}
+
+    static void alex_ext_t::build_model (const std::pair<int,int>* values, int num_keys, alex::LinearModel<int>* model,
+        bool use_sampling = false) {
+        if (use_sampling) {
+            build_model_sampling (values,num_keys, model);
+            return;
+        }
+        // build the model using all data points
+        // Independent variable (x): The key values[i].first.
+        // Dependent variable (y): The index i of the key in the array.
+            alex::LinearModelBuilder<int> builder(model);
+            for (int i = 0; i < num_keys; i++) {
+            builder.add(values[i].first, i);
+            }
+            builder.build();
+    }
+
+    static void alex_ext_t::build_model_sampling (const std::pair<int,int>* values, int num_keys,
+        alex::LinearModel<int>* model, bool verbose = false) {
+    const static int sample_size_lower_bound = 10;
+    // If slope and intercept change by less than this much between samples,
+    // return
+    const static double rel_change_threshold = 0.01;
+    // If intercept changes by less than this much between samples, return
+    const static double abs_change_threshold = 0.5;
+    // Increase sample size by this many times each iteration
+    const static int sample_size_multiplier = 2;
+
+    // If the number of keys is sufficiently small, we do not sample
+    if (num_keys <= sample_size_lower_bound * sample_size_multiplier) {
+        build_model(values, num_keys, model, false);
+        return;
+    }
+
+    int step_size = 1;
+    double sample_size = num_keys;
+    while (sample_size >= sample_size_lower_bound) {
+        sample_size /= sample_size_multiplier;
+        step_size *= sample_size_multiplier;
+    }
+    step_size /= sample_size_multiplier;
+
+    // Run with initial step size
+    alex::LinearModelBuilder<int> builder(model);
+    for (int i = 0; i < num_keys; i += step_size) {
+        
+    }
+        builder.build();
+        double prev_a = model->a_;
+        double prev_b = model->b_;
+        if (verbose) {
+            std::cout << "Build index, sample size: " << num_keys / step_size
+            << " (a, b): (" << prev_a << ", " << prev_b << ")" << std::endl;
+        }
+
+    // Keep decreasing step size (increasing sample size) until model does not
+    // change significantly
+    while (step_size > 1) {
+    step_size /= sample_size_multiplier;
+    // Need to avoid processing keys we already processed in previous samples
+    int i = 0;
+    while (i < num_keys) {
+        i += step_size;
+        for (int j = 1; (j < sample_size_multiplier) && (i < num_keys);
+        j++, i += step_size) {
+        builder.add(values[i].first, i);
+        }
+    }
+    builder.build();
+
+    double rel_change_in_a = std::abs((model->a_ - prev_a) / prev_a);
+    double abs_change_in_b = std::abs(model->b_ - prev_b);
+    double rel_change_in_b = std::abs(abs_change_in_b / prev_b);
+    if (verbose) {
+    std::cout << "Build index, sample size: " << num_keys / step_size
+    << " (a, b): (" << model->a_ << ", " << model->b_ << ") ("
+    << rel_change_in_a << ", " << rel_change_in_b << ")"
+    << std::endl;
+    }
+    if (rel_change_in_a < rel_change_threshold &&
+    (rel_change_in_b < rel_change_threshold ||
+    abs_change_in_b < abs_change_threshold)) {
+    return;
+    }
+    prev_a = model->a_;
+    prev_b = model->b_;
+    }
+}
+
+static double alex_ext_t::compute_expected_cost_sampling(
+    const std::pair<int,int>* values, int num_keys, double density,
+        double expected_insert_frac,
+        const alex::LinearModel<int>* existing_model = nullptr,
+        DataNodeStats* stats = nullptr){
+  const static int min_sample_size = 25;
+
+  // Stop increasing sample size if relative diff of stats between samples is
+  // less than this
+  const static double rel_diff_threshold = 0.2;
+
+  // Equivalent threshold in log2-space
+  const static double abs_log2_diff_threshold =
+      std::log2(1 + rel_diff_threshold);
+
+  // Increase sample size by this many times each iteration
+  const static int sample_size_multiplier = 2;
+
+  // If num_keys is below this threshold, we compute entropy exactly
+  const static int exact_computation_size_threshold =
+      (min_sample_size * sample_size_multiplier * sample_size_multiplier * 2);
+
+  // Target fraction of the keys to use in the initial sample
+  const static double init_sample_frac = 0.01;
+
+  // If the number of keys is sufficiently small, we do not sample
+  if (num_keys < exact_computation_size_threshold) {
+    return compute_expected_cost(values, num_keys, density,
+                                 expected_insert_frac, existing_model, false,
+                                 stats);
+  }
+
+  alex::LinearModel<int> model;  // trained for full dense array
+  if (existing_model == nullptr) {
+    build_model(values, num_keys, &model);
+  } else {
+    model.a_ = existing_model->a_;
+    model.b_ = existing_model->b_;
+  }
+
+  // Compute initial sample size and step size
+  // Right now, sample_num_keys holds the target sample num keys
+  int sample_num_keys = std::max(
+      static_cast<int>(num_keys * init_sample_frac), min_sample_size);
+  int step_size = 1;
+  double tmp_sample_size =
+      num_keys;  // this helps us determine the right sample size
+  while (tmp_sample_size >= sample_num_keys) {
+    tmp_sample_size /= sample_size_multiplier;
+    step_size *= sample_size_multiplier;
+  }
+  step_size /= sample_size_multiplier;
+  sample_num_keys =
+      num_keys /
+      step_size;  // now sample_num_keys is the actual sample num keys
+
+  std::vector<SampleDataNodeStats>
+      sample_stats;  // stats computed usinig each sample
+  bool compute_shifts = expected_insert_frac !=
+                        0;  // whether we need to compute expected shifts
+  double log2_num_keys = std::log2(num_keys);
+  double expected_full_search_iters =
+      0;  // extrapolated estimate for search iters on the full array
+  double expected_full_shifts =
+      0;  // extrapolated estimate shifts on the full array
+  bool search_iters_computed =
+      false;  // set to true when search iters is accurately computed
+  bool shifts_computed =
+      false;  // set to true when shifts is accurately computed
+
+  // Progressively increase sample size
+  while (true) {
+    int sample_data_capacity = std::max(
+        static_cast<int>(sample_num_keys / density), sample_num_keys + 1);
+    alex::LinearModel<int> sample_model(model.a_, model.b_);
+    sample_model.expand(static_cast<double>(sample_data_capacity) / num_keys);
+
+    // Compute stats using the sample
+    if (expected_insert_frac == 0) {
+      alex::ExpectedSearchIterationsAccumulator acc;
+      build_node_implicit_sampling(values, num_keys, sample_num_keys,
+                                   sample_data_capacity, step_size, &acc,
+                                   &sample_model);
+      sample_stats.push_back({std::log2(sample_num_keys), acc.get_stat(), 0});
+    } else {
+      alex::ExpectedIterationsAndShiftsAccumulator acc(sample_data_capacity);
+      build_node_implicit_sampling(values, num_keys, sample_num_keys,
+                                   sample_data_capacity, step_size, &acc,
+                                   &sample_model);
+      sample_stats.push_back({std::log2(sample_num_keys),
+                              acc.get_expected_num_search_iterations(),
+                              std::log2(acc.get_expected_num_shifts())});
+    }
+
+    if (sample_stats.size() >= 3) {
+      // Check if the diff in stats is sufficiently small
+      SampleDataNodeStats& s0 = sample_stats[sample_stats.size() - 3];
+      SampleDataNodeStats& s1 = sample_stats[sample_stats.size() - 2];
+      SampleDataNodeStats& s2 = sample_stats[sample_stats.size() - 1];
+      // (y1 - y0) / (x1 - x0) = (y2 - y1) / (x2 - x1) --> y2 = (y1 - y0) /
+      // (x1 - x0) * (x2 - x1) + y1
+      double expected_s2_search_iters =
+          (s1.num_search_iterations - s0.num_search_iterations) /
+              (s1.log2_sample_size - s0.log2_sample_size) *
+              (s2.log2_sample_size - s1.log2_sample_size) +
+          s1.num_search_iterations;
+      double rel_diff =
+          std::abs((s2.num_search_iterations - expected_s2_search_iters) /
+                   s2.num_search_iterations);
+      if (rel_diff <= rel_diff_threshold || num_keys <= 2 * sample_num_keys) {
+        search_iters_computed = true;
+        expected_full_search_iters =
+            (s2.num_search_iterations - s1.num_search_iterations) /
+                (s2.log2_sample_size - s1.log2_sample_size) *
+                (log2_num_keys - s2.log2_sample_size) +
+            s2.num_search_iterations;
+      }
+      if (compute_shifts) {
+        double expected_s2_log2_shifts =
+            (s1.log2_num_shifts - s0.log2_num_shifts) /
+                (s1.log2_sample_size - s0.log2_sample_size) *
+                (s2.log2_sample_size - s1.log2_sample_size) +
+            s1.log2_num_shifts;
+        double abs_diff =
+            std::abs((s2.log2_num_shifts - expected_s2_log2_shifts) /
+                     s2.log2_num_shifts);
+        if (abs_diff <= abs_log2_diff_threshold ||
+            num_keys <= 2 * sample_num_keys) {
+          shifts_computed = true;
+          double expected_full_log2_shifts =
+              (s2.log2_num_shifts - s1.log2_num_shifts) /
+                  (s2.log2_sample_size - s1.log2_sample_size) *
+                  (log2_num_keys - s2.log2_sample_size) +
+              s2.log2_num_shifts;
+          expected_full_shifts = std::pow(2, expected_full_log2_shifts);
+        }
+      }
+
+      // If diff in stats is sufficiently small, return the approximate
+      // expected cost
+      if ((expected_insert_frac == 0 && search_iters_computed) ||
+          (expected_insert_frac > 0 && search_iters_computed &&
+           shifts_computed)) {
+        double cost =
+            alex::kExpSearchIterationsWeight * expected_full_search_iters +
+            alex::kShiftsWeight * expected_full_shifts * expected_insert_frac;
+        if (stats) {
+          stats->num_search_iterations = expected_full_search_iters;
+          stats->num_shifts = expected_full_shifts;
+        }
+        return cost;
+      }
+    }
+
+    step_size /= sample_size_multiplier;
+    sample_num_keys = num_keys / step_size;
+  }
+}
+
+static void alex_ext_t::build_node_implicit_sampling(const std::pair<int,int>* values,int num_keys,
+    int sample_num_keys,
+    int sample_data_capacity,
+    int step_size, alex::StatAccumulator* ent,
+    const alex::LinearModel<int>* sample_model) {
+        int last_position = -1;
+    int sample_keys_remaining = sample_num_keys;
+    for (int i = 0; i < num_keys; i += step_size) {
+      int predicted_position =
+          std::max(0, std::min(sample_data_capacity - 1,
+                               sample_model->predict(values[i].first)));
+      int actual_position =
+          std::max<int>(predicted_position, last_position + 1);
+      int positions_remaining = sample_data_capacity - actual_position;
+      if (positions_remaining < sample_keys_remaining) {
+        actual_position = sample_data_capacity - sample_keys_remaining;
+        for (int j = i; j < num_keys; j += step_size) {
+          predicted_position =
+              std::max(0, std::min(sample_data_capacity - 1,
+                                   sample_model->predict(values[j].first)));
+          ent->accumulate(actual_position, predicted_position);
+          actual_position++;
+        }
+        break;
+      }
+      ent->accumulate(actual_position, predicted_position);
+      last_position = actual_position;
+      sample_keys_remaining--;
+    }
+  }
+
+  static void alex_ext_t::build_node_implicit(const std::pair<int,int>* values, int num_keys,
+    int data_capacity, alex::StatAccumulator* acc,
+    const alex::LinearModel<int>* model){
+        int last_position = -1;
+    int keys_remaining = num_keys;
+    for (int i = 0; i < num_keys; i++) {
+      int predicted_position = std::max(
+          0, std::min(data_capacity - 1, model->predict(values[i].first)));
+      int actual_position =
+          std::max<int>(predicted_position, last_position + 1);
+      int positions_remaining = data_capacity - actual_position;
+      if (positions_remaining < keys_remaining) {
+        actual_position = data_capacity - keys_remaining;
+        for (int j = i; j < num_keys; j++) {
+          predicted_position = std::max(
+              0, std::min(data_capacity - 1, model->predict(values[j].first)));
+          acc->accumulate(actual_position, predicted_position);
+          actual_position++;
+        }
+        break;
+      }
+      acc->accumulate(actual_position, predicted_position);
+      last_position = actual_position;
+      keys_remaining--;
+    }
+    }
 
 ///////////////////////////////////////////////////////////////////////////////
 // gist_alex::insert - insert new entry in sort order
@@ -190,140 +761,18 @@ alex_ext_t::insert(
     const vec_t& dataPtr,
     shpid_t child)
 {
-    cout<< "执行alex的insert任务"<< endl;
-    // // If enough keys fall outside the key domain, expand the root to expand the
-    // // key domain
-    // if (key > istats_.key_domain_max_) {
-    //     istats_.num_keys_above_key_domain++;
-    //     if (should_expand_right()) {
-    //         printf("expand_root_disk-right\n");
-    //     expand_root(key, false);  // expand to the right
-    //     }
-    // } else if (key < istats_.key_domain_min_) {
-    //     istats_.num_keys_below_key_domain++;
-    //     if (should_expand_left()) {
-    //         printf("expand_root_disk-left\n");
-    //     expand_root(key, true);  // expand to the left
-    //     }
-    // }
-
-    // data_node_type* leaf = get_leaf(key);
-
-    // // Nonzero fail flag means that the insert did not happen
-    // std::pair<int, int> ret = leaf->insert(key, payload);
-    // int fail = ret.first;
-    // int insert_pos = ret.second;
-    // if (fail == -1) {
-    //     // Duplicate found and duplicates not allowed
-    //     printf("repeated!!\n");
-    //     return {Iterator(leaf, insert_pos), false};
-    // }
-
-    // // If no insert, figure out what to do with the data node to decrease the
-    // // cost
-    // if (fail) {
-    //     std::vector<TraversalNode> traversal_path;
-    //     get_leaf(key, &traversal_path);
-    //     model_node_type* parent = traversal_path.back().node;
-
-    //     while (fail) {
-    //     auto start_time = std::chrono::high_resolution_clock::now();
-    //     stats_.num_expand_and_scales += leaf->num_resizes_;
-
-    //     if (parent == superroot_) {
-    //         update_superroot_key_domain();
-    //     }
-    //     int bucketID = parent->model_.predict(key);
-    //     bucketID = std::min<int>(std::max<int>(bucketID, 0),
-    //                                 parent->num_children_ - 1);
-    //     std::vector<fanout_tree::FTNode> used_fanout_tree_nodes;
-
-    //     int fanout_tree_depth = 1;
-    //     if (experimental_params_.splitting_policy_method == 0 || fail >= 2) {
-    //         // always split in 2. No extra work required here
-    //     } else if (experimental_params_.splitting_policy_method == 1) {
-    //         // decide between no split (i.e., expand and retrain) or splitting in
-    //         // 2
-    //         fanout_tree_depth = fanout_tree::find_best_fanout_existing_node<T, P>(
-    //             parent, bucketID, stats_.num_keys, used_fanout_tree_nodes, 2);
-    //     } else if (experimental_params_.splitting_policy_method == 2) {
-    //         // use full fanout tree to decide fanout
-    //         fanout_tree_depth = fanout_tree::find_best_fanout_existing_node<T, P>(
-    //             parent, bucketID, stats_.num_keys, used_fanout_tree_nodes,
-    //             derived_params_.max_fanout);
-    //     }
-    //     int best_fanout = 1 << fanout_tree_depth;
-    //     stats_.cost_computation_time +=
-    //         std::chrono::duration_cast<std::chrono::nanoseconds>(
-    //             std::chrono::high_resolution_clock::now() - start_time)
-    //             .count();
-
-    //     if (fanout_tree_depth == 0) {
-    //         // expand existing data node and retrain model
-
-    //         leaf->resize(data_node_type::kMinDensity_, true,
-    //                     leaf->is_append_mostly_right(),
-    //                     leaf->is_append_mostly_left());
-    //         fanout_tree::FTNode& tree_node = used_fanout_tree_nodes[0];
-    //         leaf->cost_ = tree_node.cost;
-    //         leaf->expected_avg_exp_search_iterations_ =
-    //             tree_node.expected_avg_search_iterations;
-    //         leaf->expected_avg_shifts_ = tree_node.expected_avg_shifts;
-    //         leaf->reset_stats();
-    //         stats_.num_expand_and_retrains++;
-    //     } else {
-    //         // split data node: always try to split sideways/upwards, only split
-    //         // downwards if necessary
-    //         bool reuse_model = (fail == 3);
-    //         if (experimental_params_.allow_splitting_upwards) {
-    //         // allow splitting upwards
-    //         assert(experimental_params_.splitting_policy_method != 2);
-    //         int stop_propagation_level = best_split_propagation(traversal_path);
-    //         if (stop_propagation_level <= superroot_->level_) {
-    //             parent = split_downwards(parent, bucketID, fanout_tree_depth,
-    //                                     used_fanout_tree_nodes, reuse_model);
-    //         } else {
-    //             split_upwards(key, stop_propagation_level, traversal_path,
-    //                         reuse_model, &parent);
-    //         }
-    //         } else {
-    //         // either split sideways or downwards
-    //         bool should_split_downwards =
-    //             (parent->num_children_ * best_fanout /
-    //                         (1 << leaf->duplication_factor_) >
-    //                     derived_params_.max_fanout ||
-    //                 parent->level_ == superroot_->level_);
-    //         if (should_split_downwards) {
-
-    //             parent = split_downwards(parent, bucketID, fanout_tree_depth,
-    //                                     used_fanout_tree_nodes, reuse_model);
-    //         } else {
-
-    //             split_sideways(parent, bucketID, fanout_tree_depth,
-    //                             used_fanout_tree_nodes, reuse_model);
-    //         }
-    //         }
-    //         leaf = static_cast<data_node_type*>(parent->get_child_node(key));
-    //     }
-    //     auto end_time = std::chrono::high_resolution_clock::now();
-    //     auto duration = end_time - start_time;
-    //     stats_.splitting_time +=
-    //         std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
-    //             .count();
-
-    //     // Try again to insert the key
-    //     ret = leaf->insert(key, payload);
-    //     fail = ret.first;
-    //     insert_pos = ret.second;
-    //     if (fail == -1) {
-    //         // Duplicate found and duplicates not allowed
-    //         return {Iterator(leaf, insert_pos), false};
-    //     }
-    //     }
-    // }
-    // stats_.num_inserts++;
-    // stats_.num_keys++;
-    // return {Iterator(leaf, insert_pos), true};
+    const void* data;
+    if (page.is_leaf()) {
+        data = dataPtr.ptr(0);
+    } else {
+        // by convention, our key also contains a data pointer (to
+        // make the internal node keys unique); we don't want to use
+        // this during _binSearch(), so we 'skip' over it.
+	data = (const void *) (((char *) key.ptr(0)) + this->keySize(key.ptr(0)));
+    }
+    int slot = _binSearch(page, key.ptr(0), data, false);
+    W_DO(page.insert(key, dataPtr, slot + 1, child));
+    return RCOK;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -873,6 +1322,7 @@ alex_ext_t::_loadPosInfo(
 	entries[firstSlot].slot = (oneGoesFirst ? -1 : -2);
     }
 }
+
 
 static int
 int_size(const void *i)
